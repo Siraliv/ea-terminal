@@ -1,0 +1,5 @@
+# Trading Journal — single-user app. There is no public landing page
+# and every meaningful route is gated behind authentication. Disallow
+# all crawlers from indexing anything.
+User-agent: *
+Disallow: /

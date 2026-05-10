@@ -1,0 +1,402 @@
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/700.css';
+@import '@fontsource/press-start-2p/400.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =========================================================================
+   Theme tokens.
+
+   Every `term.*` Tailwind color resolves to `rgb(var(--term-*) / <alpha-value>)`
+   (see tailwind.config.js), so themes swap just by changing `data-theme`
+   on <html>. Values are space-separated R G B triplets so `<alpha-value>`
+   can slot in as the alpha channel at build time.
+
+     - emerald (default)  — phosphor green on true-black. The classic.
+     - smoke              — kit-aligned cool blue-grey on near-black.
+                            Muted, desaturated; gold headline accents.
+     - paper              — kit-aligned ledger-on-cream light theme
+                            with warm dark-orange headline accents.
+
+   Keys that aren't overridden inherit from the emerald defaults under
+   `:root`.
+   ========================================================================= */
+
+:root,
+:root[data-theme='emerald'] {
+  --term-bg:          0   0   0;     /* #000000 */
+  --term-bgSoft:      10  10  10;    /* #0A0A0A */
+  --term-surface:     15  15  15;    /* #0F0F0F */
+  --term-text:        220 220 220;   /* #DCDCDC */
+  --term-muted:       138 138 138;   /* #8A8A8A */
+  --term-dim:         74  74  74;    /* #4A4A4A */
+  --term-green:       61  220 132;   /* #3DDC84 */
+  --term-greenBright: 0   255 127;   /* #00FF7F */
+  --term-greenDim:    31  93  58;    /* #1F5D3A */
+  --term-red:         255 77  77;    /* #FF4D4D */
+  --term-amber:       232 155 60;    /* #E89B3C */
+  --term-neutral:     110 110 110;   /* #6E6E6E */
+  --term-scoreFrom:   229 107 111;   /* #E56B6F */
+  --term-scoreTo:     140 47  62;    /* #8C2F3E */
+
+  /* ----- Phase 11: paper-grain texture. emerald/smoke have no organic
+     texture (terminal aesthetic); paper gets an SVG turbulence noise
+     overlay below to sell the "ledger paper" feel. Defaults here keep
+     it disabled. */
+  --term-paperGrain:        none;
+  --term-paperGrainOpacity: 0;
+
+  /* ----- Phase 7: semantic positive token. Deliberately separate from
+     --term-green (which is the UI accent for frames/buttons/active
+     items) so that themes where the UI accent diverges from "positive
+     PnL green" (smoke is grey) can still render chart positive bars
+     and equity-curve area fills as actual green. In emerald the two
+     coincide — same phosphor green for both. */
+  --term-pos:         61  220 132;   /* #3DDC84 — same as --term-green in emerald */
+
+  /* ----- Phase 8 (revised): headline accent. The token exists so
+     theme-divergent themes (smoke) can paint headlines in a warm
+     gold. In Emerald the user explicitly wanted the original
+     phosphor look preserved, so --term-gold here = --term-greenBright.
+     This means components that reference text-term-gold (FramedPanel
+     titles, sidebar wordmark, active nav, [ ACTIVE ] tag, name links)
+     all render in bright phosphor green on Emerald — visually
+     identical to the pre-Phase-8 active-state treatment. */
+  --term-gold:        0   255 127;   /* same as --term-greenBright (#00FF7F) */
+
+  /* ----- Phase 1 expansion: surface stack, border vocabulary, glow,
+     scanline. Values are DERIVED from the existing emerald palette
+     (your --term-green / --term-greenBright). The earlier tokens above
+     are unchanged — these are additive only. */
+
+  /* surface stack — for raised cards, sunken wells, hover row tints */
+  --term-bgRaised:    7   17  13;    /* #07110D — subtle green tint above bg */
+  --term-bgSunken:    3   9   12;    /* #03090C */
+  --term-bgOverlay:   11  26  20;    /* #0B1A14 — hover row */
+
+  /* border vocabulary — distinct from frame-glyph color (which uses
+     text-term-green/70). Use these for CSS borders on cards, dashed
+     rules, and active outlines. */
+  --term-border:      31  93  58;    /* same as greenDim — hard borders */
+  --term-borderDim:   16  48  36;    /* #103024 — dashed dividers */
+  --term-borderHot:   0   255 127;   /* same as greenBright — active outline */
+
+  /* phosphor glow shadows — full CSS shadow strings (consumed via
+     `text-shadow: var(--term-glowText)` or shadow-term-glow* utilities) */
+  --term-glowText:    0 0 6px  rgba(61, 220, 132, 0.45);
+  --term-glowSoft:    0 0 12px rgba(61, 220, 132, 0.18);
+  --term-glowStrong:  0 0 18px rgba(61, 220, 132, 0.55);
+
+  /* CRT scanline overlay (opt-in via .term-scanline utility) */
+  --term-scanline: repeating-linear-gradient(
+    to bottom,
+    transparent      0 2px,
+    rgba(0,0,0,0.18) 3px 3px
+  );
+
+  color-scheme: dark;
+}
+
+:root[data-theme='smoke'] {
+  /* Phase 7 — kit-aligned smoke palette. Cool blue-grey on near-black,
+     ported verbatim from the orb-jnl UI Kit's `[data-theme="smoke"]`
+     block in `colors_and_type.css`. The base surfaces lift in 4–7 RGB
+     steps so depth still reads at the kit's lower saturation. UI lines
+     (frames + active emphasis) use the kit's accent-soft → accent ramp;
+     chart positive bars/areas pull from the new --term-pos token below
+     so positive signals stay sage green even though --term-green is now
+     a cool grey. Reds and ambers also drop to the kit's softer values. */
+  --term-bg:          7   9   11;    /* #07090B — kit bg-base */
+  --term-bgSoft:      10  13  16;    /* #0A0D10 — kit bg-sunken */
+  --term-surface:     17  22  26;    /* #11161A — kit bg-raised */
+  --term-text:        232 237 242;   /* #E8EDF2 — kit fg-1 */
+  --term-muted:       168 179 189;   /* #A8B3BD — kit fg-2 */
+  --term-dim:         93  105 117;   /* #5D6975 — kit fg-3 */
+  --term-green:       170 182 194;   /* #AAB6C2 — kit accent-soft (frames at /70) */
+  --term-greenBright: 214 225 236;   /* #D6E1EC — kit accent (active emphasis) */
+  --term-greenDim:    111 122 133;   /* #6F7A85 — kit accent-deep */
+  --term-red:         229 115 115;   /* #E57373 — kit neg */
+  --term-amber:       230 179 90;    /* #E6B35A — kit warn */
+  --term-neutral:     138 148 158;   /* #8A949E — kit neutral */
+  --term-scoreFrom:   229 107 111;
+  --term-scoreTo:     140 47  62;
+
+  /* Smoke's --term-pos diverges from --term-green here: --term-green is
+     now a cool blue-grey (UI accent), but chart positive bars and the
+     equity-curve area fill use sage green so positives still register
+     as green even on the calm grey backdrop. Pulled from the kit's
+     `--pos: #7fd99a`. */
+  --term-pos:         127 217 154;   /* #7FD99A — kit pos */
+
+  /* Smoke gold — antique/champagne. Cooler and more muted than
+     emerald's warm champagne so it doesn't clash with the cool
+     blue-grey palette. */
+  --term-gold:        201 176 112;   /* #C9B070 — antique gold */
+
+  /* Phase 1 expansion — smoke (kit-aligned). */
+  --term-bgRaised:    17  22  26;    /* #11161A — kit bg-raised */
+  --term-bgSunken:    10  13  16;    /* #0A0D10 — kit bg-sunken */
+  --term-bgOverlay:   26  32  38;    /* #1A2026 — kit bg-overlay */
+
+  --term-border:      42  50  58;    /* #2A323A — kit border */
+  --term-borderDim:   26  32  38;    /* #1A2026 — kit border-dim */
+  --term-borderHot:   214 225 236;   /* same as accent — kit border-hot */
+
+  /* No phosphor glow on smoke — keep it calm. Strong glow is a barely-
+     there cool halo for emphasis-only use cases. */
+  --term-glowText:    0 0 0 transparent;
+  --term-glowSoft:    0 0 0 transparent;
+  --term-glowStrong:  0 0 12px rgba(214, 225, 236, 0.10);
+
+  --term-scanline: repeating-linear-gradient(
+    to bottom,
+    transparent      0 2px,
+    rgba(0,0,0,0.12) 3px 3px
+  );
+
+  color-scheme: dark;
+}
+
+:root[data-theme='paper'] {
+  /* Phase 10 — kit-aligned paper palette. Ledger-on-cream light theme,
+     ported verbatim from the orb-jnl UI Kit's `[data-theme="paper"]`
+     block in `colors_and_type.css`. Cream surfaces lift in 5–10 RGB
+     steps so depth still reads on the warm background. UI lines
+     (frames + active emphasis) use the kit's accent-soft → accent
+     ramp (warm dark orange); chart positives use a forest green
+     visible against the cream backdrop. Headlines (FramedPanel
+     titles, sidebar wordmark, [ ACTIVE ] tag, name links) take
+     --term-gold = the kit's --accent so they read as warm dark
+     orange — the paper theme's signature "headline" tone. */
+  --term-bg:          245 236 218;   /* #F5ECDA — kit bg-base */
+  --term-bgSoft:      235 225 205;   /* #EBE1CD — kit bg-sunken */
+  --term-surface:     250 242 226;   /* #FAF2E2 — kit bg-raised */
+  --term-text:        26  20  16;    /* #1A1410 — kit fg-1 */
+  --term-muted:       74  61  48;    /* #4A3D30 — kit fg-2 */
+  --term-dim:         122 106 85;    /* #7A6A55 — kit fg-3 */
+  --term-green:       217 122 31;    /* #D97A1F — kit accent-soft (frames at /70) */
+  --term-greenBright: 184 92  0;     /* #B85C00 — kit accent (active emphasis) */
+  --term-greenDim:    184 168 140;   /* #B8A88C — soft sand for sync-flash bg */
+  --term-red:         184 52  45;    /* #B8342D — kit neg */
+  --term-amber:       168 107 0;     /* #A86B00 — kit warn */
+  --term-neutral:     106 93  74;    /* #6A5D4A — kit neutral */
+  --term-scoreFrom:   184 52  45;
+  --term-scoreTo:     92  26  22;
+
+  /* Paper's --term-pos uses a forest green visible against cream.
+     --term-green here is warm orange (the UI accent for frames + the
+     `prop` tag), so without a separate pos token chart positive bars
+     would render orange — visible but semantically wrong as
+     "positive". Borrowed from the kit's `--pos: #2d7a3a`. */
+  --term-pos:         45  122 58;    /* #2D7A3A — visible green on cream */
+
+  /* Paper's --term-gold = kit's --accent (#B85C00). Renders as a
+     strong dark orange on cream — the paper theme's headline accent
+     applied to FramedPanel titles, sidebar wordmark, active nav,
+     [ ACTIVE ] tag, and name links throughout the app. */
+  --term-gold:        184 92  0;     /* #B85C00 — kit accent / headline */
+
+  /* Phase 1 expansion — paper. Light cream surface stack, warm earthy
+     borders, ZERO phosphor glow (a paper theme has no business
+     glowing). */
+  --term-bgRaised:    250 242 226;   /* #FAF2E2 — kit bg-raised */
+  --term-bgSunken:    235 225 205;   /* #EBE1CD — kit bg-sunken */
+  --term-bgOverlay:   227 217 197;   /* #E3D9C5 — kit bg-overlay */
+
+  --term-border:      184 168 136;   /* #B8A888 — kit border */
+  --term-borderDim:   212 196 164;   /* #D4C4A4 — kit border-dim */
+  --term-borderHot:   26  20  16;    /* #1A1410 — kit border-hot (near-black) */
+
+  /* No glow on paper — kit's --glow-text/glow-soft are explicit `none`.
+     Strong becomes the kit's faint print-ink drop. */
+  --term-glowText:    0 0 0 transparent;
+  --term-glowSoft:    0 0 0 transparent;
+  --term-glowStrong:  0 1px 0 rgba(0, 0, 0, 0.04);
+
+  --term-scanline: repeating-linear-gradient(
+    to bottom,
+    transparent      0 2px,
+    rgba(0,0,0,0.03) 3px 3px
+  );
+
+  /* Paper grain — inline SVG `feTurbulence` filter encoded as a data
+     URI. Pure-black fractal noise tile (200×200 px) that the body::after
+     pseudo-element below paints with mix-blend-mode: multiply, producing
+     a subtle uneven darkening across every cream surface. Opacity is
+     tuned low enough that it reads as paper fiber rather than visible
+     speckles — bump --term-paperGrainOpacity if you want it bolder. */
+  --term-paperGrain: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='1' seed='5' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  --term-paperGrainOpacity: 0.18;
+
+  color-scheme: light;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background: rgb(var(--term-bg));
+    color: rgb(var(--term-text));
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    margin: 0;
+    /* Theme swaps should feel instantaneous but not jarring. 120ms is
+       short enough to read as "snap" rather than "animate". */
+    transition: background-color 120ms linear, color 120ms linear;
+  }
+
+  /* Paper-grain overlay (Phase 11). A fixed-position pseudo-element that
+     paints --term-paperGrain (an inline-SVG fractal noise tile) across
+     the viewport with mix-blend-mode: multiply. On emerald and smoke the
+     grain variable resolves to `none` and opacity to 0, so this rule is
+     a no-op — only paper consumes it.
+
+     z-index sits above panel content (which is z-auto / z-10 / z-20)
+     so the multiply blend reaches every cream surface, but BELOW the
+     Lightbox modal (z-50) and the offline banner so those stay
+     un-textured. pointer-events: none keeps the overlay transparent
+     to clicks. The opacity transition matches the body theme swap so
+     the texture fades in/out smoothly when the user changes themes. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 40;
+    background-image: var(--term-paperGrain);
+    background-repeat: repeat;
+    background-size: 200px 200px;
+    opacity: var(--term-paperGrainOpacity);
+    mix-blend-mode: multiply;
+    transition: opacity 120ms linear;
+  }
+
+  /* Block caret on focused text inputs — 1 Hz blink */
+  @keyframes term-caret {
+    0%,
+    49% {
+      opacity: 1;
+    }
+    50%,
+    100% {
+      opacity: 0;
+    }
+  }
+
+  /* Inline diegetic block cursor — used by the <Caret /> primitive.
+     Sized off the parent's font (0.55em × 1em) so it inherits naturally
+     in any text context. Color resolves to the theme's primary accent. */
+  .term-caret {
+    display: inline-block;
+    width: 0.55em;
+    height: 1em;
+    vertical-align: -0.15em;
+    margin-left: 2px;
+    background: rgb(var(--term-greenBright));
+    animation: term-caret 1s steps(1) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .term-caret {
+      animation: none;
+    }
+  }
+
+  /* Brief green flash used when realtime rows update.
+     Uses the theme's `greenDim` variable so the flash tint retunes
+     automatically across themes (a dark-green flash on Emerald, a
+     cool-grey flash on Smoke). */
+  @keyframes term-sync-flash {
+    0% {
+      background-color: rgb(var(--term-greenDim) / 0.65);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  .term-sync-flash {
+    animation: term-sync-flash 400ms ease-out forwards;
+  }
+
+  /* Selection uses phosphor green (or theme equivalent) */
+  ::selection {
+    background: rgb(var(--term-greenDim));
+    color: rgb(var(--term-text));
+  }
+
+  /* Focus ring in the theme's primary accent — no rounded corners */
+  :focus-visible {
+    outline: 1px solid rgb(var(--term-green));
+    outline-offset: 1px;
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Phase 1 utilities — opt-in classes that consume the new tokens.
+   Nothing here is auto-applied; reach for them when you want phosphor
+   glow on a heading, a scanline overlay on the app shell, or a dashed
+   horizontal rule between sub-sections.
+   ---------------------------------------------------------------------- */
+@layer utilities {
+  /* Phosphor halo on text. Use sparingly on accents (active sidebar item,
+     ORB wordmark, panel title). On smoke this resolves to 0-alpha so
+     it's a no-op — safe to apply globally where it makes sense in emerald. */
+  .text-glow {
+    text-shadow: var(--term-glowText);
+  }
+  .text-glow-strong {
+    text-shadow: var(--term-glowStrong);
+  }
+
+  /* Soft phosphor box-shadow halo. Pair with `border-term-border` for the
+     "card with a faint green wash" treatment from the kit. */
+  .shadow-term-glow {
+    box-shadow: var(--term-glowSoft);
+  }
+  .shadow-term-glow-strong {
+    box-shadow: var(--term-glowStrong);
+  }
+
+  /* CRT scanline overlay. Apply to a positioned ancestor; the pseudo-
+     element fills it. Disabled automatically when the user has
+     prefers-reduced-motion enabled (some folks find it nauseating). */
+  .term-scanline {
+    position: relative;
+  }
+  .term-scanline::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: var(--term-scanline);
+    opacity: 0.5;
+    mix-blend-mode: multiply;
+    z-index: 999;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .term-scanline::after { display: none; }
+  }
+
+  /* Dashed horizontal rule for sub-sectioning inside a panel body
+     (replaces hand-rolled "─".repeat() approaches when you want a
+     genuine 1px CSS dashed-equivalent rather than ASCII glyphs). */
+  .term-rule-dashed {
+    height: 1px;
+    background-image: repeating-linear-gradient(
+      to right,
+      rgb(var(--term-borderDim)) 0 6px,
+      transparent 6px 10px
+    );
+  }
+}
