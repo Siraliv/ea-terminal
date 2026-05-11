@@ -4,28 +4,37 @@ import { create } from 'zustand';
  * Terminal theme. Values match the `data-theme` attribute applied to
  * `<html>` and the selector names in `src/index.css`.
  *
- *   - `emerald` — phosphor green on true-black. The default.
- *   - `smoke`   — kit-aligned cool blue-grey on near-black, with
- *                 antique-gold headline accents.
- *   - `paper`   — kit-aligned ledger-on-cream light theme, with warm
- *                 dark-orange headline accents.
+ *   - `emerald`      — phosphor green on true-black. The default.
+ *   - `emerald-dusk` — same phosphor-green accent vocabulary as emerald,
+ *                     but with a lifted graphite bg and dark-ink panel
+ *                     frames so boxes read as inset rather than outlined.
+ *   - `smoke`        — kit-aligned cool blue-grey on near-black, with
+ *                     antique-gold headline accents.
+ *   - `paper`        — kit-aligned ledger-on-cream light theme, with
+ *                     warm dark-orange headline accents.
  *
  * The earlier `halo` light theme was removed; any pre-existing
  * `'halo'` value in localStorage is rejected by `isTermTheme()` and
  * falls back to `emerald`.
  */
-export type TermTheme = 'emerald' | 'smoke' | 'paper';
+export type TermTheme = 'emerald' | 'emerald-dusk' | 'smoke' | 'paper';
 
 export const TERM_THEMES: readonly TermTheme[] = [
   'emerald',
+  'emerald-dusk',
   'smoke',
   'paper',
 ] as const;
 
-const STORAGE_KEY = 'trading-journal-theme';
+const STORAGE_KEY = 'ea-terminal-theme';
 
 function isTermTheme(v: unknown): v is TermTheme {
-  return v === 'emerald' || v === 'smoke' || v === 'paper';
+  return (
+    v === 'emerald' ||
+    v === 'emerald-dusk' ||
+    v === 'smoke' ||
+    v === 'paper'
+  );
 }
 
 /** Read the saved theme from localStorage. Returns 'emerald' if missing or invalid. */

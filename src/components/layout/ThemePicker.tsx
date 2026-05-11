@@ -6,9 +6,10 @@ type ThemeOption = {
 };
 
 const THEME_OPTIONS: readonly ThemeOption[] = [
-  { key: 'smoke',   label: 'SMOKE'   },
-  { key: 'emerald', label: 'EMERALD' },
-  { key: 'paper',   label: 'PAPER'   },
+  { key: 'smoke',        label: 'SMOKE'        },
+  { key: 'emerald',      label: 'EMERALD'      },
+  { key: 'emerald-dusk', label: 'EMERALD DUSK' },
+  { key: 'paper',        label: 'PAPER'        },
 ];
 
 /**

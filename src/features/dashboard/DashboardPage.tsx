@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '@/components/layout/PageHeader';
 import {
@@ -11,6 +11,7 @@ import {
   type TerminalColumn,
 } from '@/components/ui';
 import { EquityCurveChart } from '@/components/charts/EquityCurveChart';
+import { MetricBars, type MetricBarsDatum } from '@/components/charts/MetricBars';
 import { useTestsList } from '@/hooks/useTests';
 import { useEaSchemasList } from '@/hooks/useEaSchemas';
 import type { Test } from '@/types/domain';
@@ -32,6 +33,12 @@ const OVERLAY_COLORS = [
   'rgb(var(--term-gold))', // gold
   'rgb(var(--term-muted))', // grey
 ];
+
+/** Dim fill for unselected (or empty placeholder) histogram slots. */
+const DIM_BAR_COLOR = 'rgba(220, 220, 220, 0.12)';
+
+/** Fixed slot count for histograms — matches the "top 10" framing. */
+const HIST_SLOTS = 10;
 
 type RankKey = 'profit_factor' | 'total_net_profit' | 'balance_dd_max_pct';
 
@@ -504,6 +511,58 @@ export function DashboardPage() {
             </FramedPanel>
           ) : null}
 
+          {/* ─── Per-strategy histograms (Net PnL / PF / Max DD) ─── */}
+          {top10.length > 0 ? (
+            <FramedPanel
+              title="STRATEGY METRICS"
+              titleRight={
+                <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                  bars match curve colour · {top10.length}/10 ranked
+                </span>
+              }
+            >
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <MetricSubPanel label="NET PNL">
+                  <MetricBars
+                    data={buildBarSlots(
+                      top10,
+                      selectedIds,
+                      (t) => t.total_net_profit,
+                    )}
+                    format={(v) =>
+                      Math.abs(v) >= 1000
+                        ? `${(v / 1000).toFixed(0)}k`
+                        : v.toFixed(0)
+                    }
+                  />
+                </MetricSubPanel>
+
+                <MetricSubPanel label="PROFIT FACTOR">
+                  <MetricBars
+                    data={buildBarSlots(
+                      top10,
+                      selectedIds,
+                      (t) => t.profit_factor,
+                    )}
+                    format={(v) => v.toFixed(2)}
+                  />
+                </MetricSubPanel>
+
+                <MetricSubPanel label="MAX BAL DRAWDOWN">
+                  <MetricBars
+                    data={buildBarSlots(
+                      top10,
+                      selectedIds,
+                      (t) => t.balance_dd_max_pct,
+                    )}
+                    format={(v) => `${v.toFixed(0)}%`}
+                    higherIsBetter={false}
+                  />
+                </MetricSubPanel>
+              </div>
+            </FramedPanel>
+          ) : null}
+
           {/* ─── Compact KPI strip ─── */}
           <FramedPanel title="OVERVIEW">
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
@@ -565,6 +624,42 @@ export function DashboardPage() {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Build a fixed-length 10-slot array for a histogram. Each slot maps to
+ * a rank position (1..10):
+ *   - If a strategy occupies that rank and is currently selected →
+ *     value comes through, fill colour matches its overlay colour.
+ *   - If occupied but not selected → value still drawn, fill dim grey.
+ *   - If unoccupied (fewer than 10 strategies on file) → value null,
+ *     slot left empty so bar widths stay consistent.
+ */
+function buildBarSlots(
+  ranked: Test[],
+  selectedIds: string[],
+  pick: (t: Test) => number | null | undefined,
+): MetricBarsDatum[] {
+  const slots: MetricBarsDatum[] = [];
+  for (let i = 0; i < HIST_SLOTS; i++) {
+    const t = ranked[i];
+    if (!t) {
+      slots.push({ label: `${i + 1}`, value: null, color: DIM_BAR_COLOR });
+      continue;
+    }
+    const rawValue = pick(t);
+    const value =
+      typeof rawValue === 'number' && Number.isFinite(rawValue)
+        ? rawValue
+        : null;
+    const selIdx = selectedIds.indexOf(t.id);
+    const color =
+      selIdx >= 0
+        ? OVERLAY_COLORS[selIdx % OVERLAY_COLORS.length]!
+        : DIM_BAR_COLOR;
+    slots.push({ label: `${i + 1}`, value, color });
+  }
+  return slots;
+}
+
 function shortLabel(t: Test): string {
   const name = cleanEaName(t.ea_name);
   const sl = (t.inputs as Record<string, unknown>)?.['SlPercent'];
@@ -574,4 +669,25 @@ function shortLabel(t: Test): string {
       ? ` SL${sl}/TP${tp}`
       : '';
   return `${name}${slTp}`;
+}
+
+/**
+ * One labelled cell inside the STRATEGY METRICS grid. Just a small
+ * caption + the bar chart. Keeps the parent JSX terse.
+ */
+function MetricSubPanel({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-term-muted text-[10px] uppercase tracking-widest">
+        {label}
+      </span>
+      {children}
+    </div>
+  );
 }
