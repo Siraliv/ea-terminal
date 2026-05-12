@@ -49,7 +49,7 @@ export function Sidebar() {
               border separates the brand block from the SECTIONS nav. */}
           <div className="flex flex-col gap-1 pb-3 border-b border-dashed border-term-borderDim">
             <span className="font-pixel text-term-gold text-[22px] leading-none tracking-tight text-glow">
-              EA·TERM
+              SIRALIV
             </span>
             <span className="text-term-muted text-[10px] uppercase tracking-widest">
               EA Terminal
