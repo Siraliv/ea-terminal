@@ -79,14 +79,58 @@ function int(v: unknown): string {
   return v.toLocaleString();
 }
 
+/**
+ * Render a stored JSONB result-metric value into a human-readable
+ * cell.
+ *
+ * The MT5 parser emits compound objects for metrics whose source
+ * cell carries two pieces of information:
+ *   - `{value, pct}`   — e.g. Balance Drawdown Maximal: 106 048.00 (72.16%)
+ *   - `{count, pct}`   — e.g. Profit Trades (% of total): 2235 (46.17%)
+ *   - `{count, value}` — e.g. Maximum consecutive wins ($): 21 ($24 846.91)
+ *
+ * Without the cases below these collapsed to raw `JSON.stringify` —
+ * `{"count":21,"value":24846.91}` showing up in the UI. We re-emit
+ * them in MT5's native `count ($value)` / `value (pct%)` notation
+ * so the cell reads naturally.
+ */
 function formatJsonValue(v: Json | undefined): string {
   if (v == null) return '—';
   if (typeof v === 'object') {
     if (Array.isArray(v)) return `[${v.length} items]`;
-    return JSON.stringify(v);
+    const obj = v as Record<string, unknown>;
+    const hasNum = (k: string) =>
+      typeof obj[k] === 'number' && Number.isFinite(obj[k] as number);
+    if (hasNum('value') && hasNum('pct')) {
+      return `${fmtNum(obj['value'] as number)} (${fmtPct(obj['pct'] as number)})`;
+    }
+    if (hasNum('count') && hasNum('pct')) {
+      return `${obj['count']} (${fmtPct(obj['pct'] as number)})`;
+    }
+    if (hasNum('count') && hasNum('value')) {
+      return `${obj['count']} ($${fmtNum(obj['value'] as number)})`;
+    }
+    return JSON.stringify(obj);
   }
   if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'number') return fmtNum(v);
   return String(v);
+}
+
+/** `1718359.72` → `"1,718,359.72"` — 2 decimals, thousands grouped. */
+function fmtNum(n: number): string {
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** `46.17` → `"46.17%"` — never more than 2 decimals. */
+function fmtPct(n: number): string {
+  return `${n.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}%`;
 }
 
 export function TestDetailPage() {
