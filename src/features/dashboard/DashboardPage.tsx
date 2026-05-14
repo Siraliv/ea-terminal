@@ -12,6 +12,10 @@ import {
 } from '@/components/ui';
 import { EquityCurveChart } from '@/components/charts/EquityCurveChart';
 import { MetricBars, type MetricBarsDatum } from '@/components/charts/MetricBars';
+import {
+  GroupedMetricBars,
+  type GroupedMetricBarsDatum,
+} from '@/components/charts/GroupedMetricBars';
 import { useTestsList } from '@/hooks/useTests';
 import { useEaSchemasList } from '@/hooks/useEaSchemas';
 import type { Test } from '@/types/domain';
@@ -506,6 +510,17 @@ export function DashboardPage() {
                   data={selected[0].equity_curve}
                   overlays={overlays}
                   height={360}
+                  initialBalances={selected
+                    .map((t, i) =>
+                      t.initial_deposit != null
+                        ? {
+                            value: t.initial_deposit,
+                            color:
+                              OVERLAY_COLORS[i % OVERLAY_COLORS.length]!,
+                          }
+                        : null,
+                    )
+                    .filter((m): m is { value: number; color: string } => m !== null)}
                 />
               ) : null}
             </FramedPanel>
@@ -522,7 +537,10 @@ export function DashboardPage() {
               }
             >
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <MetricSubPanel label="NET PNL">
+                <MetricSubPanel
+                  label="NET PNL"
+                  info="Total profit minus total loss over the whole backtest. The single bottom-line dollar figure — positive means the strategy made money on net, negative means it lost. Compare in absolute terms, but always sanity-check against drawdown: a high net PnL paid for by a huge drawdown is not the same as one earned smoothly."
+                >
                   <MetricBars
                     data={buildBarSlots(
                       top10,
@@ -537,7 +555,10 @@ export function DashboardPage() {
                   />
                 </MetricSubPanel>
 
-                <MetricSubPanel label="PROFIT FACTOR">
+                <MetricSubPanel
+                  label="PROFIT FACTOR"
+                  info="Gross profit divided by gross loss. PF = 1.0 means wins and losses cancel out; > 1.0 is profitable, < 1.0 is losing. PF ≥ 1.5 is generally considered robust, ≥ 2.0 is excellent. Unlike net PnL, PF is scale-free: a strategy can have small net profit but a strong PF, meaning its edge per dollar risked is good."
+                >
                   <MetricBars
                     data={buildBarSlots(
                       top10,
@@ -548,7 +569,10 @@ export function DashboardPage() {
                   />
                 </MetricSubPanel>
 
-                <MetricSubPanel label="MAX BAL DRAWDOWN">
+                <MetricSubPanel
+                  label="MAX BAL DRAWDOWN"
+                  info="The largest peak-to-trough drop in account balance, as a percentage of the peak. This is the worst losing streak the strategy lived through. Lower is better. A high drawdown means painful equity dips even if the strategy is profitable overall — and it tells you how much capital you'd need to survive the strategy's worst run without blowing up."
+                >
                   <MetricBars
                     data={buildBarSlots(
                       top10,
@@ -557,6 +581,58 @@ export function DashboardPage() {
                     )}
                     format={(v) => `${v.toFixed(0)}%`}
                     higherIsBetter={false}
+                  />
+                </MetricSubPanel>
+
+                <MetricSubPanel
+                  label="MAX CONSECUTIVE (WINS / LOSSES)"
+                  info="The longest streak of consecutive winning trades (green) and losing trades (red). Long losing streaks tell you how many losses in a row you'd need to mentally absorb without abandoning the strategy. Long winning streaks can flag overfitting if they look unrealistic. The win-streak ÷ loss-streak ratio is a rough proxy for the strategy's persistence under noise."
+                >
+                  <GroupedMetricBars
+                    data={buildGroupedSlots(
+                      top10,
+                      selectedIds,
+                      (t) => pickCountValue(t, 'Maximum consecutive wins ($)')?.count,
+                      (t) => pickCountValue(t, 'Maximum consecutive losses ($)')?.count,
+                    )}
+                    primaryLabel="Wins"
+                    secondaryLabel="Losses"
+                    format={(v) => v.toFixed(0)}
+                  />
+                </MetricSubPanel>
+
+                <MetricSubPanel
+                  label="MAX CONSECUTIVE PNL ($)"
+                  caption="Losses drawn as magnitudes — actual values are negative."
+                  info="The cumulative dollar PnL of the longest winning streak (green) and the longest losing streak (red). Different from streak length: a 5-trade losing streak might cost $5k or $50k depending on position sizing and stops. This is the real worst-case dollar pain in one consecutive sequence — useful for sizing reserves and stress-testing your risk budget."
+                >
+                  <GroupedMetricBars
+                    data={buildGroupedSlots(
+                      top10,
+                      selectedIds,
+                      (t) =>
+                        pickCountValue(t, 'Maximum consecutive wins ($)')
+                          ?.value,
+                      (t) => {
+                        // MT5 reports the losing streak total as a
+                        // negative number. Flip to its magnitude so the
+                        // wins and losses bars sit on the same axis and
+                        // are visually comparable. The caption above
+                        // makes the sign convention explicit.
+                        const v = pickCountValue(
+                          t,
+                          'Maximum consecutive losses ($)',
+                        )?.value;
+                        return typeof v === 'number' ? Math.abs(v) : undefined;
+                      },
+                    )}
+                    primaryLabel="Wins $"
+                    secondaryLabel="Losses $ (abs)"
+                    format={(v) =>
+                      Math.abs(v) >= 1000
+                        ? `${(v / 1000).toFixed(0)}k`
+                        : v.toFixed(0)
+                    }
                   />
                 </MetricSubPanel>
               </div>
@@ -660,6 +736,66 @@ function buildBarSlots(
   return slots;
 }
 
+/**
+ * Build the two-bar histogram slots for the grouped wins/losses charts.
+ * Same selection-vs-dim logic as `buildBarSlots`: occupied + selected
+ * slots get the strategy's overlay tint; occupied-but-unselected slots
+ * still draw bars in dim grey; empty slots reserve width.
+ */
+function buildGroupedSlots(
+  ranked: Test[],
+  selectedIds: string[],
+  pickPrimary: (t: Test) => number | null | undefined,
+  pickSecondary: (t: Test) => number | null | undefined,
+): GroupedMetricBarsDatum[] {
+  const slots: GroupedMetricBarsDatum[] = [];
+  for (let i = 0; i < HIST_SLOTS; i++) {
+    const t = ranked[i];
+    if (!t) {
+      slots.push({
+        label: `${i + 1}`,
+        primary: null,
+        secondary: null,
+        tint: DIM_BAR_COLOR,
+      });
+      continue;
+    }
+    const p = pickPrimary(t);
+    const s = pickSecondary(t);
+    const selIdx = selectedIds.indexOf(t.id);
+    const tint =
+      selIdx >= 0
+        ? OVERLAY_COLORS[selIdx % OVERLAY_COLORS.length]!
+        : DIM_BAR_COLOR;
+    slots.push({
+      label: `${i + 1}`,
+      primary: typeof p === 'number' && Number.isFinite(p) ? p : null,
+      secondary: typeof s === 'number' && Number.isFinite(s) ? s : null,
+      tint,
+    });
+  }
+  return slots;
+}
+
+/**
+ * Extract a `{count, value}` pair from a Test's `results` bag for one
+ * of MT5's compound metrics ("Maximum consecutive wins ($)" etc.).
+ * Returns null if the key is absent or has the wrong shape.
+ */
+function pickCountValue(
+  t: Test,
+  key: string,
+): { count: number; value: number } | null {
+  const raw = (t.results as Record<string, unknown>)[key];
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const o = raw as { count?: unknown; value?: unknown };
+    if (typeof o.count === 'number' && typeof o.value === 'number') {
+      return { count: o.count, value: o.value };
+    }
+  }
+  return null;
+}
+
 function shortLabel(t: Test): string {
   const name = cleanEaName(t.ea_name);
   const sl = (t.inputs as Record<string, unknown>)?.['SlPercent'];
@@ -677,17 +813,79 @@ function shortLabel(t: Test): string {
  */
 function MetricSubPanel({
   label,
+  caption,
+  info,
   children,
 }: {
   label: string;
+  /** Optional small note shown below the chart (e.g. sign conventions). */
+  caption?: string;
+  /**
+   * Optional explainer text — surfaces as a `[?]` chip beside the
+   * label that reveals a styled tooltip on hover/focus. Helps users
+   * who don't already know what a metric means (or what it implies).
+   */
+  info?: string;
   children: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-term-muted text-[10px] uppercase tracking-widest">
-        {label}
-      </span>
+      <div className="flex items-center gap-2">
+        <span className="text-term-muted text-[10px] uppercase tracking-widest">
+          {label}
+        </span>
+        {info ? <InfoChip text={info} ariaLabel={`About ${label}`} /> : null}
+      </div>
       {children}
+      {caption ? (
+        <span className="text-term-dim text-[10px] italic leading-snug">
+          {caption}
+        </span>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * `[?]` hover affordance. Keyboard-focusable for accessibility; the
+ * tooltip body is a styled popover (not the native `title` attribute)
+ * so its look matches the terminal aesthetic.
+ */
+function InfoChip({ text, ariaLabel }: { text: string; ariaLabel: string }) {
+  return (
+    <span className="relative inline-flex group">
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        className={[
+          'inline-flex items-center justify-center',
+          'w-4 h-4 rounded-sm',
+          'text-[9px] font-bold leading-none',
+          'text-term-muted hover:text-term-text',
+          'border border-term-dim hover:border-term-muted',
+          'transition-colors cursor-help',
+          'focus:outline-none focus:ring-1 focus:ring-term-pos',
+        ].join(' ')}
+      >
+        ?
+      </button>
+      <span
+        role="tooltip"
+        className={[
+          'pointer-events-none absolute z-20',
+          'top-full left-0 mt-1',
+          'w-64 max-w-[calc(100vw-2rem)]',
+          'rounded-sm border border-term-dim bg-term-bg/95',
+          'px-2.5 py-2',
+          'text-[11px] leading-snug text-term-text',
+          'font-mono',
+          'shadow-lg',
+          'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+          'transition-opacity duration-100',
+        ].join(' ')}
+      >
+        {text}
+      </span>
+    </span>
   );
 }

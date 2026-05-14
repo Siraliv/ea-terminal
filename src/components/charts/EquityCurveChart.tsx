@@ -3,6 +3,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   type TooltipProps,
@@ -19,6 +20,19 @@ import {
 } from './theme';
 import type { EquityPoint } from '@/types/domain';
 
+/** A starting-balance marker — one horizontal dashed line per entry. */
+export interface InitialBalanceMarker {
+  /** Balance value (USD). Lines at equal values are deduped into one. */
+  value: number;
+  /**
+   * Stroke colour. Used only when distinct values force per-curve lines.
+   * When all markers share one value, a single muted line is drawn.
+   */
+  color: string;
+  /** Optional label shown at the line's right edge. */
+  label?: string;
+}
+
 export interface EquityCurveChartProps {
   /** Single curve. */
   data: readonly EquityPoint[];
@@ -26,8 +40,13 @@ export interface EquityCurveChartProps {
   overlays?: { id: string; label: string; data: readonly EquityPoint[]; color: string }[];
   /** Chart height in px. Default 320. */
   height?: number;
-  /** Initial deposit — drawn as a horizontal reference line (optional). */
-  initialDeposit?: number | null;
+  /**
+   * Starting balances to draw as horizontal dashed reference lines.
+   * If every entry has the same `value`, a single muted line is shown.
+   * If they differ, one line per entry is drawn in its own colour so
+   * each curve's baseline is identifiable.
+   */
+  initialBalances?: readonly InitialBalanceMarker[];
 }
 
 interface ChartRow {
@@ -47,8 +66,23 @@ export function EquityCurveChart({
   data,
   overlays = [],
   height = 320,
-  initialDeposit,
+  initialBalances,
 }: EquityCurveChartProps) {
+  // Dedupe starting balances. If every curve started at the same balance
+  // we collapse to a single muted reference line; otherwise each curve
+  // gets its own coloured line so the baseline is unambiguous.
+  const balanceLines = useMemo<InitialBalanceMarker[]>(() => {
+    const list = (initialBalances ?? []).filter(
+      (m): m is InitialBalanceMarker =>
+        m != null && Number.isFinite(m.value),
+    );
+    if (list.length === 0) return [];
+    const distinct = Array.from(new Set(list.map((m) => m.value)));
+    if (distinct.length === 1) {
+      return [{ value: distinct[0]!, color: chartTheme.muted, label: 'Start' }];
+    }
+    return list;
+  }, [initialBalances]);
   const rows = useMemo<ChartRow[]>(() => {
     // Build a unified timeline keyed by epoch-ms across primary + overlays.
     const map = new Map<number, ChartRow>();
@@ -134,17 +168,34 @@ export function EquityCurveChart({
           }}
         />
 
-        {initialDeposit != null ? (
-          <Line
-            dataKey={() => initialDeposit}
-            stroke={chartTheme.dim}
-            strokeWidth={1}
-            strokeDasharray="3 3"
-            dot={false}
-            isAnimationActive={false}
-            name="Initial deposit"
+        {/*
+         * Starting-balance reference lines. Drawn behind the data lines.
+         * Dashed; visibility is non-negotiable — strokeWidth 1.25 and
+         * full opacity. When all curves share one starting balance,
+         * `balanceLines` collapses to a single muted line.
+         */}
+        {balanceLines.map((m, i) => (
+          <ReferenceLine
+            key={`bal-${i}-${m.value}`}
+            y={m.value}
+            stroke={m.color}
+            strokeDasharray="5 4"
+            strokeWidth={1.25}
+            strokeOpacity={0.9}
+            ifOverflow="extendDomain"
+            label={{
+              value:
+                m.label ??
+                `$${m.value.toLocaleString(undefined, {
+                  maximumFractionDigits: 0,
+                })}`,
+              position: 'insideTopRight',
+              fill: m.color,
+              fontSize: 10,
+              fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+            }}
           />
-        ) : null}
+        ))}
 
         <Line
           dataKey={PRIMARY_KEY}
