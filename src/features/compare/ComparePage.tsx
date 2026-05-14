@@ -140,11 +140,19 @@ export function ComparePage() {
     return ids ? ids.split(',').filter(Boolean).slice(0, MAX_SELECTED) : [];
   });
 
-  // Mirror selection to URL.
+  // Mirror selection to URL. Mutate the existing search params rather
+  // than constructing a fresh one — otherwise unrelated query keys
+  // (e.g. `?from=email`, `?ref=…`) would be wiped on first render.
   useEffect(() => {
-    const next = new URLSearchParams();
-    if (selectedIds.length) next.set('ids', selectedIds.join(','));
-    setSearchParams(next, { replace: true });
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (selectedIds.length) next.set('ids', selectedIds.join(','));
+        else next.delete('ids');
+        return next;
+      },
+      { replace: true },
+    );
   }, [selectedIds, setSearchParams]);
 
   const eaOptions = useMemo(() => {

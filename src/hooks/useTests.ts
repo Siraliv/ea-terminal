@@ -100,16 +100,19 @@ export function useUploadTest(): UseMutationResult<
 
       const hash = await sha256Hex(file);
 
-      // Dedupe check.
-      const { data: existing } = await supabase
+      // Cheap precheck for the common case (user re-uploads same file).
+      // The authoritative dedup is the `(user_id, file_hash)` unique
+      // index — checked again *after* the insert, so two parallel
+      // uploads of the same file can't both succeed.
+      const { data: existingPre } = await supabase
         .from('tests')
         .select('*')
         .eq('user_id', user.id)
         .eq('file_hash', hash)
         .maybeSingle();
 
-      if (existing) {
-        return { test: rowToTest(existing), duplicate: true };
+      if (existingPre) {
+        return { test: rowToTest(existingPre), duplicate: true };
       }
 
       // Generate id, upload raw curve.
@@ -123,6 +126,7 @@ export function useUploadTest(): UseMutationResult<
         .upload(rawPath, rawGz, {
           contentType: 'application/gzip',
           upsert: false,
+          cacheControl: '31536000',
         });
       if (uploadErr) {
         throw new Error(`Raw curve upload failed: ${uploadErr.message}`);
@@ -170,8 +174,22 @@ export function useUploadTest(): UseMutationResult<
         .single();
 
       if (error) {
-        // Best-effort cleanup of the raw curve.
+        // Race-loss path: another parallel upload of the same file
+        // beat us to the unique `(user_id, file_hash)` index. Clean
+        // up the orphan raw curve we just uploaded, fetch the row
+        // the winner inserted, and report it as a duplicate.
         await supabase.storage.from('raw-curves').remove([rawPath]);
+        if (isUniqueViolation(error)) {
+          const { data: winner } = await supabase
+            .from('tests')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('file_hash', hash)
+            .maybeSingle();
+          if (winner) {
+            return { test: rowToTest(winner), duplicate: true };
+          }
+        }
         throw error;
       }
 
@@ -235,6 +253,19 @@ export function useDeleteTest(): UseMutationResult<void, Error, Test> {
 // ─────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────
+
+/**
+ * Postgres unique-constraint violation. Supabase forwards PG error
+ * codes verbatim on `PostgrestError.code`, but the network-layer
+ * error shape doesn't expose that field with a stable type, so we
+ * inspect both `code` and the message text defensively.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; message?: unknown };
+  if (e.code === '23505') return true;
+  return typeof e.message === 'string' && /duplicate key|unique/i.test(e.message);
+}
 
 async function upsertEaSchema(userId: string, parsed: Mt5Normalised) {
   const inputKeys: Record<string, string> = {};

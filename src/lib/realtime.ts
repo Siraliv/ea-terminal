@@ -62,6 +62,12 @@ export function useRealtimeSync(): RealtimeStatus {
     }
 
     channel.subscribe((state) => {
+      // Drop status callbacks that fire after the effect has cleaned
+      // up — e.g. user signs out, we tear down the channel, then the
+      // server's last `CHANNEL_ERROR` arrives moments later. Without
+      // this guard we'd flip `channelState` for a channel that no
+      // longer exists, briefly mis-rendering the offline banner.
+      if (channelRef.current !== channel) return;
       if (state === 'SUBSCRIBED') setChannelState('connected');
       else if (state === 'CHANNEL_ERROR' || state === 'TIMED_OUT')
         setChannelState('error');
@@ -113,5 +119,7 @@ function handleChange(
       break;
   }
 
-  if (id) signalFlash(id);
+  // Don't flash a row that's about to disappear from the UI — the
+  // flash would briefly highlight a row already being removed.
+  if (id && payload.eventType !== 'DELETE') signalFlash(id);
 }

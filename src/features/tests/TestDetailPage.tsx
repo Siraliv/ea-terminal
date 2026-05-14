@@ -99,14 +99,24 @@ export function TestDetailPage() {
   const [notesDraft, setNotesDraft] = useState<string>('');
   const [notesTouched, setNotesTouched] = useState(false);
 
-  // Seed the notes draft from the loaded test exactly once per test id.
-  // Subsequent edits stay local until the user clicks Save Notes.
+  // Seed the notes draft from the loaded test. Re-seeds whenever the
+  // server value changes (e.g. realtime UPDATE from another tab) —
+  // but only while the user hasn't started editing locally. As soon
+  // as `notesTouched` flips true, unsaved work is preserved until
+  // they Save or navigate away.
+  //
+  // The deps are `test?.id` + `test?.notes` so we don't re-fire on
+  // every TanStack-Query refetch that produces an identity-fresh
+  // object with unchanged data. setState in the effect body is
+  // intentional — there is no pure-derivation path that preserves
+  // the local-edit semantics.
   useEffect(() => {
-    if (test) {
-      setNotesDraft(test.notes ?? '');
-      setNotesTouched(false);
-    }
-  }, [test?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!test) return;
+    if (notesTouched) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setNotesDraft(test.notes ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [test?.id, test?.notes, notesTouched]);
 
   const onRate = useCallback(
     (rating: number | null) => {
