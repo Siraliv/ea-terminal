@@ -53,22 +53,29 @@ export function lttbDownsample<T extends XYPoint>(
       Math.floor((i + 3) * bucketSize) + 1,
       data.length,
     );
-    const nextLen = Math.max(nextEnd - nextStart, 1);
 
     let avgX = 0;
     let avgY = 0;
-    if (nextStart < data.length) {
+    // `nextEnd <= nextStart` covers two pathological cases:
+    //   - We're past the end of the array (last bucket).
+    //   - Math.floor rounding produced a zero-width bucket, which
+    //     would otherwise leave avgX/avgY at 0 (skewing the triangle
+    //     toward the X-axis origin) or, if we divided unconditionally,
+    //     yield NaN. Fall back to the final point in both cases — it's
+    //     a stable "next vertex" and matches the algorithm's intent
+    //     for the trailing edge.
+    if (nextEnd <= nextStart || nextStart >= data.length) {
+      const last = data[data.length - 1]!;
+      avgX = last.x;
+      avgY = last.y;
+    } else {
+      const nextLen = nextEnd - nextStart;
       for (let j = nextStart; j < nextEnd; j++) {
         avgX += data[j]!.x;
         avgY += data[j]!.y;
       }
       avgX /= nextLen;
       avgY /= nextLen;
-    } else {
-      // Last bucket — use the final point as the "next" vertex.
-      const last = data[data.length - 1]!;
-      avgX = last.x;
-      avgY = last.y;
     }
 
     const a = data[aIdx]!;

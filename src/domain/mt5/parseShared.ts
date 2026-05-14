@@ -10,6 +10,14 @@ import { parseLooseNumber } from './normalise';
  * timestamp string. MT5 emits timestamps in `"YYYY.MM.DD HH:MM:SS"`
  * form across both XLSX and HTML exports; SheetJS may also hand us a
  * `Date` (when `cellDates: true`) or an Excel serial number.
+ *
+ * **Time-zone convention.** MT5 reports broker server time without a
+ * tz suffix. We treat every wall-clock string as **naïve UTC** so the
+ * XLSX and HTML parsers produce identical timestamps for the same
+ * input — `Date.parse("2015.01.02 16:00:03")` is locale-dependent and
+ * was the source of subtle drift between the two parsers. Callers
+ * should likewise treat `EquityPoint.t` as broker time, not literal
+ * UTC, and avoid `getHours()` (use `getUTCHours()`) when displaying.
  */
 export function toIsoTimestamp(v: unknown): string | null {
   if (v instanceof Date) {
@@ -28,7 +36,12 @@ export function toIsoTimestamp(v: unknown): string | null {
       const ts = Date.parse(iso);
       return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
     }
-    const parsed = Date.parse(s);
+    // Fallback: try ISO-style strings. Append `Z` if no tz info is
+    // present so we still interpret as UTC instead of falling back to
+    // the host machine's local zone (which would differ between dev
+    // boxes and Vercel's prod runtime).
+    const hasTz = /(Z|[+-]\d{2}:?\d{2})$/.test(s);
+    const parsed = Date.parse(hasTz ? s : `${s}Z`);
     return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
   }
   if (typeof v === 'number') {

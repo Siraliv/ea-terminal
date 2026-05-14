@@ -65,7 +65,15 @@ export type Mt5Results = Record<string, Mt5MetricValue>;
 
 /** Single point on an equity curve. */
 export interface EquityPoint {
-  /** ISO 8601 timestamp e.g. "2015-01-02T16:00:03.000Z". */
+  /**
+   * ISO 8601 timestamp e.g. `"2015-01-02T16:00:03.000Z"`.
+   *
+   * MT5 strategy-tester timestamps are broker server time with **no**
+   * tz info; we serialise them as if they were UTC so XLSX and HTML
+   * exports of the same backtest produce byte-identical points.
+   * Display layers should use `getUTC*` methods (not `getHours`) to
+   * avoid the host machine's local zone shifting the value.
+   */
   t: string;
   /** Running account balance after this deal. */
   b: number;

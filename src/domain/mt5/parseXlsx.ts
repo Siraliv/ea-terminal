@@ -119,6 +119,12 @@ function scrapeSheet(sheet: XLSX.WorkSheet, filename: string): Mt5Raw {
       if (val == null) continue;
       // If the value cell is empty string after trimming, skip.
       if (typeof val === 'string' && val.trim() === '') continue;
+      // MT5 uses each Results label exactly once across the three
+      // (label, value) column pairs. If we ever see the same label
+      // twice — locale duplicate, shifted layout, or stray cell — the
+      // first occurrence wins. Overwriting would silently corrupt
+      // headline metrics; keeping the first preserves them.
+      if (label in resultsRaw) continue;
       resultsRaw[label] = typeof val === 'number' ? val : String(val).trim();
     }
   }
@@ -173,12 +179,12 @@ function scrapeDealsCurve(
   for (let r = dataStart; r <= lastRow; r++) {
     const tCell = cellValue(sheet, `A${r}`);
     const bCell = cellValue(sheet, `L${r}`);
-    if (tCell == null && bCell == null) {
-      // Two consecutive empties → end of table.
-      const next = cellValue(sheet, `A${r + 1}`);
-      if (next == null) break;
-      continue;
-    }
+    // Positive terminator: the deals table only contains datestamps
+    // or `Date` objects in column A. Anything else (a section header
+    // like "Orders" / "Summary", a footer note, a blank gap) ends the
+    // table. The previous "two consecutive empties" rule walked past
+    // the table whenever a comment row had a blank A but populated L.
+    if (!isDealRowMarker(tCell)) break;
     const t = toIsoTimestamp(tCell);
     const b = asOptNumber(bCell);
     if (t == null || b == null) continue;
@@ -186,5 +192,26 @@ function scrapeDealsCurve(
   }
 
   return points;
+}
+
+/**
+ * Does this column-A cell look like a deals-table data row?
+ *
+ * Accepts:
+ *   - `Date` (SheetJS with `cellDates: true` returns these).
+ *   - Strings shaped `YYYY.MM.DD HH:MM(:SS)?` (the MT5 format).
+ *   - Excel serial dates (positive finite numbers).
+ *
+ * Rejects anything else — most importantly bare section headers like
+ * `"Orders"` / `"Summary"`, which previously slipped past the
+ * two-empties heuristic.
+ */
+function isDealRowMarker(v: unknown): boolean {
+  if (v instanceof Date) return Number.isFinite(v.getTime());
+  if (typeof v === 'number') return Number.isFinite(v) && v > 0;
+  if (typeof v === 'string') {
+    return /^\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}[ T]\d{1,2}:\d{2}/.test(v.trim());
+  }
+  return false;
 }
 

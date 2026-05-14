@@ -89,31 +89,66 @@ export function parseCountPct(s: string): Mt5CountPct | null {
 /**
  * Parse `"16 (26 299.93)"` (count first) OR `"26 299.93 (16)"`
  * (value first) — both shapes appear in MT5's "Maximum/Maximal
- * consecutive..." rows. Disambiguate by which side is integer-only.
+ * consecutive..." rows.
+ *
+ * MT5's label tells us which is which:
+ *   - Label ends `($)`     → outer side is count, parens hold the $.
+ *   - Label ends `(count)` → outer side is the $, parens hold count.
+ *
+ * When the caller can't supply the label (legacy call sites), we fall
+ * back to an integer-side heuristic — fine for one-off display, but
+ * fragile when both halves happen to be integers, which is why the
+ * label hint is preferred.
  */
-export function parseCountValue(s: string): Mt5CountValue | null {
+export function parseCountValue(
+  s: string,
+  order?: 'count-first' | 'value-first',
+): Mt5CountValue | null {
   const m = s.match(/^([\d\s\u00A0.,\-+]+)\s*\(([\d\s\u00A0.,\-+]+)\)/);
   if (!m) return null;
   const left = parseLooseNumber(m[1]!);
   const right = parseLooseNumber(m[2]!);
   if (left == null || right == null) return null;
-  // Heuristic: the integer side is the count.
+
+  if (order === 'count-first') return { count: left, value: right };
+  if (order === 'value-first') return { count: right, value: left };
+
+  // No hint — fall back to "integer side is the count".
   if (Number.isInteger(left) && !Number.isInteger(right)) {
     return { count: left, value: right };
   }
   if (Number.isInteger(right) && !Number.isInteger(left)) {
     return { count: right, value: left };
   }
-  // Both integers (possible for "Average consecutive..." cases) — assume
-  // left is count, right is value, matching the `count ($)` ordering.
+  // Both integers (e.g. "Average consecutive...") — match MT5's most
+  // common count-first layout.
   return { count: left, value: right };
+}
+
+/** Inspect an MT5 label to decide the count/value ordering, if any. */
+function countValueOrderFromLabel(
+  label?: string,
+): 'count-first' | 'value-first' | undefined {
+  if (!label) return undefined;
+  // "Maximum consecutive wins ($)"   / "... losses ($)" → count (value$)
+  if (/\(\s*\$\s*\)\s*$/u.test(label)) return 'count-first';
+  // "Maximal consecutive profit (count)" / "... loss (count)" → value$ (count)
+  if (/\(\s*count\s*\)\s*$/iu.test(label)) return 'value-first';
+  return undefined;
 }
 
 /**
  * Coerce a raw string from the Results column into the appropriate
  * shape: number, ValuePct, CountPct, CountValue, or fallback string.
+ *
+ * `label` (the MT5 metric key) is optional but recommended — it lets
+ * us disambiguate `CountValue` ordering deterministically rather than
+ * relying on which half happens to be integer.
  */
-export function coerceMetric(raw: string | number): Mt5MetricValue {
+export function coerceMetric(
+  raw: string | number,
+  label?: string,
+): Mt5MetricValue {
   if (typeof raw === 'number') return raw;
   const s = String(raw).trim();
   if (s === '') return null;
@@ -124,7 +159,7 @@ export function coerceMetric(raw: string | number): Mt5MetricValue {
   const cp = parseCountPct(s);
   if (cp) return cp;
   if (s.includes('(') && s.includes(')')) {
-    const cv = parseCountValue(s);
+    const cv = parseCountValue(s, countValueOrderFromLabel(label));
     if (cv) return cv;
   }
   // Bare percentage like "4339.44%".
@@ -145,7 +180,7 @@ export function coerceInputValue(raw: string): string | number | boolean {
   if (s === 'true') return true;
   if (s === 'false') return false;
   const n = parseLooseNumber(s);
-  if (n != null && /^[+\-]?\d*\.?\d+(?:[eE][+\-]?\d+)?$/.test(s)) return n;
+  if (n != null && /^[+-]?\d*\.?\d+(?:[eE][+-]?\d+)?$/.test(s)) return n;
   return s;
 }
 
@@ -233,7 +268,7 @@ export function normaliseMt5Raw(raw: Mt5Raw): Mt5Normalised {
 
   const results: Mt5Results = {};
   for (const [k, v] of Object.entries(raw.resultsRaw)) {
-    results[k] = coerceMetric(v);
+    results[k] = coerceMetric(v, k);
   }
 
   const headline = buildHeadline(results);
