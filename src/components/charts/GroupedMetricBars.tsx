@@ -68,7 +68,17 @@ export function GroupedMetricBars({
     if (typeof d.primary === 'number') values.push(d.primary);
     if (typeof d.secondary === 'number') values.push(d.secondary);
   }
-  const min = values.length > 0 ? Math.min(0, ...values) : 0;
+  const dataMin = values.length > 0 ? Math.min(...values) : 0;
+  const dataMax = values.length > 0 ? Math.max(...values) : 1;
+  const min = Math.min(0, dataMin);
+  // See MetricBars for the rationale: anchor at zero for one-signed
+  // data, span actual min..max only when both signs appear.
+  const yDomain: [number | 'dataMin', number | 'dataMax'] =
+    dataMin >= 0
+      ? [0, 'dataMax']
+      : dataMax <= 0
+        ? ['dataMin', 0]
+        : ['dataMin', 'dataMax'];
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -92,7 +102,7 @@ export function GroupedMetricBars({
           tickFormatter={format}
           width={44}
           tickCount={3}
-          domain={[min === 0 ? 0 : 'dataMin', 'dataMax']}
+          domain={yDomain}
         />
         {min < 0 ? (
           <ReferenceLine

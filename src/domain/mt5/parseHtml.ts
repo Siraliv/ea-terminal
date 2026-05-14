@@ -136,9 +136,18 @@ function scrapeRows(rows: HTMLTableRowElement[], filename: string): Mt5Raw {
     }
 
     if (section === 'deals') {
-      // First non-marker row is the column-header row.
+      // Wait until we've actually walked past the column-header row
+      // before reading data rows. Some MT5 builds emit a one-line
+      // summary inside the Deals section *before* the header — the
+      // old "first non-marker row" flag was eating the first real
+      // deal in those exports. We sniff for the literal "Time" cell
+      // (the leftmost header label is stable across MT5 locales we
+      // ship for).
       if (!dealsHeaderSeen) {
-        dealsHeaderSeen = true;
+        const first = (cells[0]?.textContent ?? '').trim().toLowerCase();
+        if (first === 'time') {
+          dealsHeaderSeen = true;
+        }
         continue;
       }
       if (cells.length < 12) continue;

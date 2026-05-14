@@ -20,26 +20,28 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (id.includes('recharts') || id.includes('d3-')) {
-              return 'vendor-charts';
-            }
-            if (id.includes('@supabase')) return 'vendor-supabase';
-            if (
-              id.includes('react-hook-form') ||
-              id.includes('@hookform') ||
-              id.includes('zod')
-            ) {
-              return 'vendor-forms';
-            }
-            if (
-              id.includes('react-router') ||
-              id.includes('/react/') ||
-              id.includes('/react-dom/') ||
-              id.includes('scheduler')
-            ) {
-              return 'vendor-react';
-            }
+          if (!id.includes('node_modules')) return undefined;
+          // Normalise to forward slashes — Rolldown emits OS-native
+          // separators on Windows for module IDs, which would otherwise
+          // break the path-segment regexes below.
+          const p = id.replace(/\\/g, '/');
+
+          if (/\/(recharts|d3-[^/]+)\//.test(p)) return 'vendor-charts';
+          if (p.includes('/@supabase/')) return 'vendor-supabase';
+          if (
+            /\/(react-hook-form|@hookform|zod)\//.test(p)
+          ) {
+            return 'vendor-forms';
+          }
+          // Match `react`, `react-dom`, `scheduler`, `react-router*` —
+          // and *only* those — by checking the package boundary
+          // explicitly. `id.includes('/react/')` worked but was easy
+          // to mis-read; this leaves no ambiguity about what counts.
+          if (
+            /\/react(-dom|-router(?:-dom)?)?\//.test(p) ||
+            /\/scheduler\//.test(p)
+          ) {
+            return 'vendor-react';
           }
           return undefined;
         },

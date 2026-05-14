@@ -59,8 +59,21 @@ export function MetricBars({
   const values = data
     .map((d) => d.value)
     .filter((v): v is number => typeof v === 'number');
-  const min = values.length > 0 ? Math.min(0, ...values) : 0;
-  const max = values.length > 0 ? Math.max(0, ...values) : 1;
+  const dataMin = values.length > 0 ? Math.min(...values) : 0;
+  const dataMax = values.length > 0 ? Math.max(...values) : 1;
+  const min = Math.min(0, dataMin);
+  const max = Math.max(0, dataMax);
+  // For all-positive (or all-negative) series we anchor the axis at
+  // zero so the bars' heights are proportional to their actual values.
+  // 'dataMin' as the lower bound would shrink the range to the smallest
+  // bar's height, visually flattening the gap between rank-1 and
+  // rank-2 — misleading on a strategy-comparison view.
+  const yDomain: [number | 'dataMin', number | 'dataMax'] =
+    dataMin >= 0
+      ? [0, 'dataMax']
+      : dataMax <= 0
+        ? ['dataMin', 0]
+        : ['dataMin', 'dataMax'];
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -83,7 +96,7 @@ export function MetricBars({
           tickFormatter={format}
           width={44}
           tickCount={3}
-          domain={[min === 0 ? 0 : 'dataMin', 'dataMax']}
+          domain={yDomain}
         />
         {min < 0 ? (
           <ReferenceLine

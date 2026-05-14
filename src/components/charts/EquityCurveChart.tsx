@@ -182,7 +182,12 @@ export function EquityCurveChart({
             strokeDasharray="5 4"
             strokeWidth={1.25}
             strokeOpacity={0.9}
-            ifOverflow="extendDomain"
+            // `hidden` instead of `extendDomain`: if a marker sits far
+            // outside the chart's auto-computed Y range, don't widen
+            // the axis to fit it — that would squish the actual curve
+            // into a thin band. The marker simply doesn't render
+            // until the chart's range happens to cover it.
+            ifOverflow="hidden"
             label={{
               value:
                 m.label ??
