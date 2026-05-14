@@ -1,6 +1,12 @@
 import * as XLSX from 'xlsx';
 import type { EquityPoint, Mt5Normalised } from './types';
-import { normaliseMt5Raw, parseLooseNumber, type Mt5Raw } from './normalise';
+import { normaliseMt5Raw, type Mt5Raw } from './normalise';
+import {
+  asOptNumber,
+  asOptString,
+  asString,
+  toIsoTimestamp,
+} from './parseShared';
 
 /**
  * Parse an MT5 Strategy Tester `.xlsx` export from a buffer/ArrayBuffer.
@@ -50,23 +56,6 @@ export async function parseMt5XlsxFile(file: File): Promise<Mt5Normalised> {
 function cellValue(sheet: XLSX.WorkSheet, addr: string): unknown {
   const cell = sheet[addr] as XLSX.CellObject | undefined;
   return cell?.v;
-}
-
-function asString(v: unknown): string {
-  if (v == null) return '';
-  if (v instanceof Date) return v.toISOString();
-  return String(v).trim();
-}
-
-function asOptString(v: unknown): string | null {
-  const s = asString(v);
-  return s === '' ? null : s;
-}
-
-function asOptNumber(v: unknown): number | null {
-  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
-  if (typeof v === 'string') return parseLooseNumber(v);
-  return null;
 }
 
 function scrapeSheet(sheet: XLSX.WorkSheet, filename: string): Mt5Raw {
@@ -199,35 +188,3 @@ function scrapeDealsCurve(
   return points;
 }
 
-function toIsoTimestamp(v: unknown): string | null {
-  if (v instanceof Date) {
-    return v.toISOString();
-  }
-  if (typeof v === 'string') {
-    // MT5 format: "2015.01.02 16:00:03"
-    const m = v.match(
-      /^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/,
-    );
-    if (m) {
-      const [, y, mo, d, h, mi, se] = m;
-      const iso = `${y}-${pad2(mo!)}-${pad2(d!)}T${pad2(h!)}:${mi}:${se ?? '00'}.000Z`;
-      const ts = Date.parse(iso);
-      return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
-    }
-    const parsed = Date.parse(v);
-    return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
-  }
-  if (typeof v === 'number') {
-    // Excel serial date → JS Date. SheetJS returns numbers when
-    // `cellDates` is false; we set it to true above so this branch is
-    // a fallback.
-    const epoch = Date.UTC(1899, 11, 30);
-    const ms = epoch + v * 86_400_000;
-    return new Date(ms).toISOString();
-  }
-  return null;
-}
-
-function pad2(s: string): string {
-  return s.length === 1 ? `0${s}` : s;
-}

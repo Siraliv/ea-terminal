@@ -7,6 +7,7 @@ import {
   FilePreviewCard,
   type SlotState,
 } from '@/components/upload/FilePreviewCard';
+import { parseMt5HtmlFile } from '@/domain/mt5/parseHtml';
 import { parseMt5XlsxFile } from '@/domain/mt5/parseXlsx';
 import { useUploadTest } from '@/hooks/useTests';
 
@@ -55,17 +56,12 @@ export function UploadPage() {
           });
           continue;
         }
-        if (fmt === 'html') {
-          updateSlot(slot.id, {
-            status: 'error',
-            error: 'HTML parser is not implemented yet — coming soon.',
-          });
-          continue;
-        }
-
         updateSlot(slot.id, { status: 'parsing' });
         try {
-          const parsed = await parseMt5XlsxFile(slot.file);
+          const parsed =
+            fmt === 'html'
+              ? await parseMt5HtmlFile(slot.file)
+              : await parseMt5XlsxFile(slot.file);
           updateSlot(slot.id, { status: 'parsed', parsed });
         } catch (err) {
           updateSlot(slot.id, {
@@ -128,7 +124,7 @@ export function UploadPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="UPLOAD"
-        subtitle="Drop MT5 .xlsx exports — parsed on the spot, saved on confirm"
+        subtitle="Drop MT5 .xlsx or .html exports — parsed on the spot, saved on confirm"
         actions={
           slots.length > 0 ? (
             <>
