@@ -197,49 +197,37 @@ export function EquityCurveChart({
         />
 
         {/*
-         * Year-scope highlight: a subtle shaded band bracketed by two
-         * dashed verticals. Sits behind the balance markers and the
-         * data lines so the curve stays readable. Rendered only when
-         * the caller wants it (year filter, custom date range, etc.);
-         * Recharts clips it to the chart's x domain automatically.
+         * Year-scope highlight: a dashed-outline rectangle ("box")
+         * with a faint fill, drawn over the chart between two x
+         * positions. The full curves keep painting underneath so the
+         * surrounding context is visible while the user's eye is
+         * drawn to the active year. ReferenceArea's own stroke does
+         * all four sides — no need for separate vertical lines.
          */}
         {highlightRange ? (
-          <>
-            <ReferenceArea
-              x1={highlightRange[0]}
-              x2={highlightRange[1]}
-              strokeOpacity={0}
-              fill={chartTheme.green}
-              fillOpacity={0.06}
-              ifOverflow="hidden"
-              label={
-                highlightLabel
-                  ? {
-                      value: highlightLabel,
-                      position: 'insideTop',
-                      fill: chartTheme.muted,
-                      fontSize: 10,
-                      fontFamily:
-                        '"JetBrains Mono", ui-monospace, monospace',
-                    }
-                  : undefined
-              }
-            />
-            <ReferenceLine
-              x={highlightRange[0]}
-              stroke={chartTheme.muted}
-              strokeDasharray="3 3"
-              strokeWidth={1}
-              ifOverflow="hidden"
-            />
-            <ReferenceLine
-              x={highlightRange[1]}
-              stroke={chartTheme.muted}
-              strokeDasharray="3 3"
-              strokeWidth={1}
-              ifOverflow="hidden"
-            />
-          </>
+          <ReferenceArea
+            x1={highlightRange[0]}
+            x2={highlightRange[1]}
+            stroke={chartTheme.greenBright}
+            strokeDasharray="5 4"
+            strokeWidth={1.5}
+            strokeOpacity={0.9}
+            fill={chartTheme.greenBright}
+            fillOpacity={0.08}
+            ifOverflow="hidden"
+            label={
+              highlightLabel
+                ? {
+                    value: highlightLabel,
+                    position: 'insideTop',
+                    fill: chartTheme.greenBright,
+                    fontSize: 11,
+                    fontFamily:
+                      '"JetBrains Mono", ui-monospace, monospace',
+                  }
+                : undefined
+            }
+          />
         ) : null}
 
         {/*
