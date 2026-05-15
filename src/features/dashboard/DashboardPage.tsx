@@ -176,6 +176,29 @@ export function DashboardPage() {
     [top10, selectedIds],
   );
 
+  /**
+   * Un-scoped counterparts of `selected`, used to compute the chart's
+   * x-axis domain when a year filter is active. We want the line to
+   * narrow to the selected year while the time axis keeps spanning
+   * the full backtest, so the user can place that slice in context.
+   */
+  const selectedFullRange = useMemo<[number, number] | undefined>(() => {
+    if (!isYearScoped) return undefined;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const id of selectedIds) {
+      const raw = tests.find((t) => t.id === id);
+      if (!raw) continue;
+      for (const p of raw.equity_curve) {
+        const ts = Date.parse(p.t);
+        if (!Number.isFinite(ts)) continue;
+        if (ts < min) min = ts;
+        if (ts > max) max = ts;
+      }
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? [min, max] : undefined;
+  }, [isYearScoped, selectedIds, tests]);
+
   const overlays = useMemo(() => {
     if (selected.length === 0) return [];
     return selected.slice(1).map((t, i) => ({
@@ -578,6 +601,7 @@ export function DashboardPage() {
                   data={selected[0].equity_curve}
                   overlays={overlays}
                   height={360}
+                  xDomainOverride={selectedFullRange}
                   initialBalances={selected
                     .map((t, i) =>
                       t.initial_deposit != null

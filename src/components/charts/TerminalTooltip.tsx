@@ -25,7 +25,15 @@ export function TerminalTooltip({
       style={{ color: chartTheme.text }}
     >
       <div className="text-term-muted mb-0.5">
-        {typeof label === 'string' ? shortDate(label) : label}
+        {typeof label === 'string'
+          ? shortDate(label)
+          : typeof label === 'number' && Number.isFinite(label)
+            ? // Big numeric labels are almost always epoch ms (we use
+              // `type="number"` + `scale="time"` for time axes). Format
+              // them as ISO dates so the tooltip header isn't gibberish
+              // when a caller forgets to pre-format.
+              new Date(label).toISOString().slice(0, 10)
+            : label}
       </div>
       {payload.map((entry, i) => (
         <div key={i} className="flex gap-2">

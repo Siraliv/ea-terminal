@@ -47,6 +47,14 @@ export interface EquityCurveChartProps {
    * each curve's baseline is identifiable.
    */
   initialBalances?: readonly InitialBalanceMarker[];
+  /**
+   * Override the x-axis domain as `[startMs, endMs]`. Useful when the
+   * visible data is a slice (e.g. one year) but the chart frame
+   * should still show the full backtest period so the user can place
+   * that slice in context. When omitted, the domain auto-fits to the
+   * data points.
+   */
+  xDomainOverride?: [number, number];
 }
 
 interface ChartRow {
@@ -67,6 +75,7 @@ export function EquityCurveChart({
   overlays = [],
   height = 320,
   initialBalances,
+  xDomainOverride,
 }: EquityCurveChartProps) {
   // Dedupe starting balances. If every curve started at the same balance
   // we collapse to a single muted reference line; otherwise each curve
@@ -107,9 +116,10 @@ export function EquityCurveChart({
   }, [data, overlays]);
 
   const xDomain = useMemo<[number, number] | undefined>(() => {
+    if (xDomainOverride) return xDomainOverride;
     if (rows.length === 0) return undefined;
     return [rows[0]!.ts, rows[rows.length - 1]!.ts];
-  }, [rows]);
+  }, [rows, xDomainOverride]);
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -144,9 +154,21 @@ export function EquityCurveChart({
           content={(props) => {
             const tooltipProps =
               props as unknown as TooltipProps<number, string>;
+            // The x-axis dataKey is `ts` (epoch ms), so Recharts hands
+            // us a numeric `label`. Recharts' built-in `labelFormatter`
+            // is only applied to the default tooltip, not to a custom
+            // `content` renderer — pre-format the date here so the
+            // tooltip header reads "2017-05-26" instead of "14957…".
+            const rawLabel = tooltipProps.label;
+            const ts =
+              typeof rawLabel === 'number' ? rawLabel : Number(rawLabel);
+            const formattedLabel = Number.isFinite(ts)
+              ? fmtTooltipDate(new Date(ts).toISOString())
+              : String(rawLabel ?? '');
             return (
               <TerminalTooltip
                 {...tooltipProps}
+                label={formattedLabel}
                 format={({ name, value }) => {
                   const v =
                     typeof value === 'number'
@@ -159,12 +181,6 @@ export function EquityCurveChart({
                 }}
               />
             );
-          }}
-          labelFormatter={(label: unknown) => {
-            const ts = typeof label === 'number' ? label : Number(label);
-            return Number.isFinite(ts)
-              ? fmtTooltipDate(new Date(ts).toISOString())
-              : String(label);
           }}
         />
 

@@ -198,6 +198,29 @@ export function ComparePage() {
 
   const isYearScoped = yearFilter !== ALL_YEARS;
 
+  /**
+   * Full backtest x-range across the un-scoped versions of the selected
+   * tests. When a year filter is active we pass this to the chart so
+   * the time axis still spans the whole backtest while the lines only
+   * paint inside the selected year.
+   */
+  const selectedFullRange = useMemo<[number, number] | undefined>(() => {
+    if (!isYearScoped) return undefined;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const id of selectedIds) {
+      const raw = tests.find((t) => t.id === id);
+      if (!raw) continue;
+      for (const p of raw.equity_curve) {
+        const ts = Date.parse(p.t);
+        if (!Number.isFinite(ts)) continue;
+        if (ts < min) min = ts;
+        if (ts > max) max = ts;
+      }
+    }
+    return Number.isFinite(min) && Number.isFinite(max) ? [min, max] : undefined;
+  }, [isYearScoped, selectedIds, tests]);
+
   const overlays = useMemo(() => {
     if (selected.length === 0) return [];
     // The first selected becomes the primary curve in the chart;
@@ -445,6 +468,7 @@ export function ComparePage() {
               data={selected[0].equity_curve}
               overlays={overlays}
               height={360}
+              xDomainOverride={selectedFullRange}
               initialBalances={selected
                 .map((t, i) =>
                   t.initial_deposit != null
