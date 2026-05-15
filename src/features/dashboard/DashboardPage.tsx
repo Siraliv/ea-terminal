@@ -25,6 +25,7 @@ import {
   matchesYear,
   type YearFilter,
 } from '@/lib/yearFilter';
+import { applyYearScope } from '@/lib/yearScope';
 
 // ─────────────────────────────────────────────────────────────────────
 // Constants
@@ -130,17 +131,27 @@ export function DashboardPage() {
   const [autoMode, setAutoMode] = useState(true);
 
   const yearOptions = useMemo(() => availableYears(tests), [tests]);
+  const isYearScoped = yearFilter !== ALL_YEARS;
+
+  /**
+   * Tests projected onto the selected year. When `yearFilter === 'all'`
+   * this is the identity transform and each entry === the original.
+   * Otherwise each test's curve and headline metrics are recomputed
+   * over the year-clipped subset — see `lib/yearScope.ts`.
+   */
+  const scopedTests = useMemo(
+    () =>
+      tests
+        .filter((t) => matchesYear(t, yearFilter))
+        .map((t) => applyYearScope(t, yearFilter)),
+    [tests, yearFilter],
+  );
 
   // ── Top 10 by current rank ─────────────────────────────────────────
   const top10 = useMemo(() => {
     const opt = RANK_OPTIONS.find((o) => o.value === rankBy)!;
-    return tests
-      .filter(
-        (t) =>
-          t.status === 'active' &&
-          t[rankBy] != null &&
-          matchesYear(t, yearFilter),
-      )
+    return scopedTests
+      .filter((t) => t.status === 'active' && t[rankBy] != null)
       .slice()
       .sort((a, b) => {
         const av = a[rankBy] as number;
@@ -148,7 +159,7 @@ export function DashboardPage() {
         return opt.higherIsBetter ? bv - av : av - bv;
       })
       .slice(0, 10);
-  }, [tests, rankBy, yearFilter]);
+  }, [scopedTests, rankBy]);
 
   // ── Auto-apply top 3 whenever rankBy changes (or in auto mode and
   //    the top 10 changes via a refetch) ───────────────────────────
@@ -190,10 +201,13 @@ export function DashboardPage() {
   };
 
   // ── KPI roll-ups (compact strip below the main feature) ──────────
+  // Use `scopedTests` so the strip narrates the same window as the
+  // ranked list and the chart above it. When `yearFilter === 'all'`
+  // this collapses to the original full-period rollup.
   const stats = useMemo(() => {
-    const active = tests.filter((t) => t.status === 'active');
+    const active = scopedTests.filter((t) => t.status === 'active');
     return {
-      totalTests: tests.length,
+      totalTests: scopedTests.length,
       activeTests: active.length,
       uniqueEAs: new Set(active.map((t) => t.ea_name)).size,
       uniqueSymbols: new Set(active.map((t) => t.symbol)).size,
@@ -203,7 +217,7 @@ export function DashboardPage() {
       avgWinRate: avg(active.map((t) => t.win_rate)),
       avgBalanceDD: avg(active.map((t) => t.balance_dd_max_pct)),
     };
-  }, [tests]);
+  }, [scopedTests]);
 
   const recentUploads = useMemo(() => {
     return tests
@@ -374,6 +388,25 @@ export function DashboardPage() {
                   ))}
                 </Select>
               </div>
+
+              {isYearScoped ? (
+                <div className="flex flex-col gap-1">
+                  <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                    Scope
+                  </span>
+                  <BracketedTag
+                    variant="paused"
+                    title={
+                      'Metrics are derived from the downsampled equity curve ' +
+                      'clipped to this year. Net PnL and drawdown stay close ' +
+                      "to MT5's figures; profit factor, win rate, and streak " +
+                      'counts are approximations.'
+                    }
+                  >
+                    {String(yearFilter)} · APPROX
+                  </BracketedTag>
+                </div>
+              ) : null}
 
               <div className="flex flex-col gap-1">
                 <span className="text-term-muted text-[10px] uppercase tracking-wider">

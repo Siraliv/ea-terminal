@@ -17,6 +17,7 @@ import {
   matchesYear,
   type YearFilter,
 } from '@/lib/yearFilter';
+import { applyYearScope } from '@/lib/yearScope';
 
 /** Up to N tests at once. More than 5 overlapping curves is unreadable. */
 const MAX_SELECTED = 5;
@@ -183,13 +184,19 @@ export function ComparePage() {
     });
   }, [tests, eaFilter, yearFilter, search]);
 
+  // Resolve selection from the *raw* tests list, then project onto the
+  // active year filter. When `yearFilter === 'all'` `applyYearScope` is
+  // the identity transform, so this collapses to the original lookup.
   const selected = useMemo(
     () =>
       selectedIds
         .map((id) => tests.find((t) => t.id === id))
-        .filter((t): t is Test => !!t),
-    [tests, selectedIds],
+        .filter((t): t is Test => !!t)
+        .map((t) => applyYearScope(t, yearFilter)),
+    [tests, selectedIds, yearFilter],
   );
+
+  const isYearScoped = yearFilter !== ALL_YEARS;
 
   const overlays = useMemo(() => {
     if (selected.length === 0) return [];
@@ -287,20 +294,36 @@ export function ComparePage() {
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
               Year
             </span>
-            <Select
-              value={String(yearFilter)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setYearFilter(v === ALL_YEARS ? ALL_YEARS : Number(v));
-              }}
-            >
-              <option value={ALL_YEARS}>— all —</option>
-              {yearOptions.map((y) => (
-                <option key={y} value={String(y)}>
-                  {y}
-                </option>
-              ))}
-            </Select>
+            <div className="flex items-center gap-2">
+              <Select
+                value={String(yearFilter)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setYearFilter(v === ALL_YEARS ? ALL_YEARS : Number(v));
+                }}
+              >
+                <option value={ALL_YEARS}>— all —</option>
+                {yearOptions.map((y) => (
+                  <option key={y} value={String(y)}>
+                    {y}
+                  </option>
+                ))}
+              </Select>
+              {isYearScoped ? (
+                <BracketedTag
+                  variant="paused"
+                  title={
+                    'Year-scoped metrics are derived from the ' +
+                    'downsampled equity curve clipped to this year. ' +
+                    'Net PnL and drawdown stay close to MT5; profit ' +
+                    'factor, win rate and streak counts are ' +
+                    'approximations.'
+                  }
+                >
+                  APPROX
+                </BracketedTag>
+              ) : null}
+            </div>
           </div>
           <div className="flex flex-col gap-1 md:col-span-2">
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
