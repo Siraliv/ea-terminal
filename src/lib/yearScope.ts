@@ -1,6 +1,12 @@
 import type { Json } from '@/types/database';
 import type { EquityPoint, Test } from '@/types/domain';
-import { ALL_YEARS, type YearFilter } from './yearFilter';
+import {
+  ALL_YEARS,
+  isAllRange,
+  normaliseRange,
+  type YearFilter,
+  type YearRange,
+} from './yearFilter';
 
 /**
  * Project a `Test` onto a single calendar year.
@@ -30,13 +36,48 @@ export function projectToYear(
   year: number,
   rawCurve?: readonly EquityPoint[] | null,
 ): Test {
-  const yStart = Date.UTC(year, 0, 1);
-  const yEnd = Date.UTC(year + 1, 0, 1);
+  return projectToWindow(
+    t,
+    Date.UTC(year, 0, 1),
+    Date.UTC(year + 1, 0, 1),
+    rawCurve,
+  );
+}
+
+/**
+ * Project a `Test` onto an inclusive year range. Both endpoints may
+ * be open (`ALL_YEARS`) — e.g. `{from: 2020, to: ALL_YEARS}` means
+ * "2020 onwards". When the range is fully open (`ALL_RANGE`) we
+ * return the original test untouched.
+ */
+export function projectToYearRange(
+  t: Test,
+  range: YearRange,
+  rawCurve?: readonly EquityPoint[] | null,
+): Test {
+  const w = normaliseRange(range);
+  if (w == null) return t;
+  const start = Number.isFinite(w.from) ? Date.UTC(w.from, 0, 1) : -Infinity;
+  const end = Number.isFinite(w.to) ? Date.UTC(w.to + 1, 0, 1) : Infinity;
+  return projectToWindow(t, start, end, rawCurve);
+}
+
+/**
+ * Internal core: clip + recompute metrics over a half-open
+ * `[startMs, endMs)` epoch window. `-Infinity` / `Infinity` are
+ * allowed and treated as open-ended bounds.
+ */
+function projectToWindow(
+  t: Test,
+  startMs: number,
+  endMs: number,
+  rawCurve?: readonly EquityPoint[] | null,
+): Test {
   const source: readonly EquityPoint[] =
     rawCurve && rawCurve.length > 0 ? rawCurve : t.equity_curve;
   const inYear = source.filter((p) => {
     const ts = Date.parse(p.t);
-    return Number.isFinite(ts) && ts >= yStart && ts < yEnd;
+    return Number.isFinite(ts) && ts >= startMs && ts < endMs;
   });
 
   if (inYear.length < 2) {
@@ -159,6 +200,20 @@ export function applyYearScope(
 ): Test {
   if (filter === ALL_YEARS) return t;
   return projectToYear(t, filter, rawCurve);
+}
+
+/**
+ * Range-aware convenience wrapper. Identity when the range is fully
+ * open, otherwise re-projects the test over `[from, to]` (inclusive,
+ * year-resolution).
+ */
+export function applyYearRangeScope(
+  t: Test,
+  range: YearRange,
+  rawCurve?: readonly EquityPoint[] | null,
+): Test {
+  if (isAllRange(range)) return t;
+  return projectToYearRange(t, range, rawCurve);
 }
 
 function stripConsecutive(

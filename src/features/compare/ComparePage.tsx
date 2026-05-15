@@ -12,12 +12,16 @@ import { EquityCurveChart } from '@/components/charts/EquityCurveChart';
 import { useTestsList } from '@/hooks/useTests';
 import type { Test } from '@/types/domain';
 import {
+  ALL_RANGE,
   ALL_YEARS,
   availableYears,
-  matchesYear,
-  type YearFilter,
+  formatRange,
+  isAllRange,
+  matchesYearRange,
+  normaliseRange,
+  type YearRange,
 } from '@/lib/yearFilter';
-import { applyYearScope } from '@/lib/yearScope';
+import { applyYearRangeScope } from '@/lib/yearScope';
 import { rollUpRawStatus, useRawCurves } from '@/hooks/useRawCurve';
 
 /** Up to N tests at once. More than 5 overlapping curves is unreadable. */
@@ -142,7 +146,7 @@ export function ComparePage() {
   const { data: tests = [], isLoading, error } = useTestsList();
 
   const [eaFilter, setEaFilter] = useState<string>('');
-  const [yearFilter, setYearFilter] = useState<YearFilter>(ALL_YEARS);
+  const [yearRange, setYearRange] = useState<YearRange>(ALL_RANGE);
   const [search, setSearch] = useState<string>('');
 
   const yearOptions = useMemo(() => availableYears(tests), [tests]);
@@ -176,16 +180,16 @@ export function ComparePage() {
     const q = search.trim().toLowerCase();
     return tests.filter((t) => {
       if (eaFilter && t.ea_name !== eaFilter) return false;
-      if (!matchesYear(t, yearFilter)) return false;
+      if (!matchesYearRange(t, yearRange)) return false;
       if (!q) return true;
       const hay = [t.ea_name, t.ea_version ?? '', t.symbol, t.timeframe ?? '']
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [tests, eaFilter, yearFilter, search]);
+  }, [tests, eaFilter, yearRange, search]);
 
-  const isYearScoped = yearFilter !== ALL_YEARS;
+  const isYearScoped = !isAllRange(yearRange);
 
   /**
    * Un-scoped versions of the currently picked tests. Pre-computed
@@ -223,9 +227,9 @@ export function ComparePage() {
   const selected = useMemo(
     () =>
       selectedSource.map((t) =>
-        applyYearScope(t, yearFilter, rawCurveById.get(t.id) ?? null),
+        applyYearRangeScope(t, yearRange, rawCurveById.get(t.id) ?? null),
       ),
-    [selectedSource, yearFilter, rawCurveById],
+    [selectedSource, yearRange, rawCurveById],
   );
 
   /**
@@ -242,12 +246,35 @@ export function ComparePage() {
     [selectedIds, tests],
   );
 
-  /** UTC [Jan 1, Jan 1+1y) of the selected year, when year-scoped. */
+  /**
+   * Highlight band bounds for the equity chart. Open ends are clamped
+   * to the data span of the picked tests' raw curves so the box stays
+   * inside the visible x-axis.
+   */
   const yearHighlight = useMemo<[number, number] | undefined>(() => {
-    if (!isYearScoped) return undefined;
-    const y = yearFilter as number;
-    return [Date.UTC(y, 0, 1), Date.UTC(y + 1, 0, 1)];
-  }, [isYearScoped, yearFilter]);
+    const w = normaliseRange(yearRange);
+    if (w == null) return undefined;
+    let dataMin = Infinity;
+    let dataMax = -Infinity;
+    for (const t of selectedSource) {
+      for (const p of t.equity_curve) {
+        const ts = Date.parse(p.t);
+        if (!Number.isFinite(ts)) continue;
+        if (ts < dataMin) dataMin = ts;
+        if (ts > dataMax) dataMax = ts;
+      }
+    }
+    if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) {
+      return undefined;
+    }
+    const start = Number.isFinite(w.from)
+      ? Date.UTC(w.from, 0, 1)
+      : dataMin;
+    const end = Number.isFinite(w.to)
+      ? Date.UTC(w.to + 1, 0, 1)
+      : dataMax;
+    return [start, end];
+  }, [yearRange, selectedSource]);
 
   const overlays = useMemo(() => {
     if (selectedRaw.length === 0) return [];
@@ -325,7 +352,7 @@ export function ComparePage() {
           </span>
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-3">
           <div className="flex flex-col gap-1">
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
               EA
@@ -344,24 +371,54 @@ export function ComparePage() {
           </div>
           <div className="flex flex-col gap-1">
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
-              Year
+              From year
+            </span>
+            <Select
+              value={String(yearRange.from)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setYearRange((r) => ({
+                  ...r,
+                  from: v === ALL_YEARS ? ALL_YEARS : Number(v),
+                }));
+              }}
+            >
+              <option value={ALL_YEARS}>— start —</option>
+              {yearOptions.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-term-muted text-[10px] uppercase tracking-wider">
+              To year
             </span>
             <div className="flex items-center gap-2">
               <Select
-                value={String(yearFilter)}
+                value={String(yearRange.to)}
                 onChange={(e) => {
                   const v = e.target.value;
-                  setYearFilter(v === ALL_YEARS ? ALL_YEARS : Number(v));
+                  setYearRange((r) => ({
+                    ...r,
+                    to: v === ALL_YEARS ? ALL_YEARS : Number(v),
+                  }));
                 }}
               >
-                <option value={ALL_YEARS}>— all —</option>
+                <option value={ALL_YEARS}>— end —</option>
                 {yearOptions.map((y) => (
                   <option key={y} value={String(y)}>
                     {y}
                   </option>
                 ))}
               </Select>
-              {isYearScoped ? <ScopeChip status={rawStatus} /> : null}
+              {isYearScoped ? (
+                <ScopeChip
+                  label={formatRange(yearRange)}
+                  status={rawStatus}
+                />
+              ) : null}
             </div>
           </div>
           <div className="flex flex-col gap-1 md:col-span-2">
@@ -486,7 +543,7 @@ export function ComparePage() {
               height={360}
               highlightRange={yearHighlight}
               highlightLabel={
-                isYearScoped ? String(yearFilter) : undefined
+                isYearScoped ? formatRange(yearRange) : undefined
               }
               initialBalances={selectedRaw
                 .map((t, i) =>
@@ -614,8 +671,11 @@ export function ComparePage() {
  * still LOADING those curves, or APPROX (fall-back to downsampled).
  */
 function ScopeChip({
+  label,
   status,
 }: {
+  /** Range label (e.g. `"2020–2022"`, `"≤2022"`). */
+  label: string;
   status: 'idle' | 'loading' | 'ready' | 'error';
 }) {
   if (status === 'loading') {
@@ -627,7 +687,7 @@ function ScopeChip({
           'Numbers shown are approximate until they finish loading.'
         }
       >
-        LOADING…
+        {label} · LOADING…
       </BracketedTag>
     );
   }
@@ -641,7 +701,7 @@ function ScopeChip({
           'downsampled curve.'
         }
       >
-        APPROX
+        {label} · APPROX
       </BracketedTag>
     );
   }
@@ -649,11 +709,11 @@ function ScopeChip({
     <BracketedTag
       variant="active"
       title={
-        'Year-scoped metrics are derived from the full-resolution ' +
+        'Range-scoped metrics are derived from the full-resolution ' +
         'equity curves and match MT5 within rounding.'
       }
     >
-      RAW
+      {label} · RAW
     </BracketedTag>
   );
 }

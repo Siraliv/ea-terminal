@@ -20,12 +20,16 @@ import { useTestsList } from '@/hooks/useTests';
 import { useEaSchemasList } from '@/hooks/useEaSchemas';
 import type { Test } from '@/types/domain';
 import {
+  ALL_RANGE,
   ALL_YEARS,
   availableYears,
-  matchesYear,
-  type YearFilter,
+  formatRange,
+  isAllRange,
+  matchesYearRange,
+  normaliseRange,
+  type YearRange,
 } from '@/lib/yearFilter';
-import { applyYearScope } from '@/lib/yearScope';
+import { applyYearRangeScope } from '@/lib/yearScope';
 import { rollUpRawStatus, useRawCurves } from '@/hooks/useRawCurve';
 
 // ─────────────────────────────────────────────────────────────────────
@@ -126,21 +130,21 @@ export function DashboardPage() {
   const { data: schemas = [] } = useEaSchemasList();
 
   const [rankBy, setRankBy] = useState<RankKey>('profit_factor');
-  const [yearFilter, setYearFilter] = useState<YearFilter>(ALL_YEARS);
+  const [yearRange, setYearRange] = useState<YearRange>(ALL_RANGE);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   /** True until the user manually toggles — controls auto-selection. */
   const [autoMode, setAutoMode] = useState(true);
 
   const yearOptions = useMemo(() => availableYears(tests), [tests]);
-  const isYearScoped = yearFilter !== ALL_YEARS;
+  const isYearScoped = !isAllRange(yearRange);
 
   /**
    * Year-matching candidate tests (full set used for projection).
    * Computed before raw fetch so the hook can size its query batch.
    */
   const candidateTests = useMemo(
-    () => tests.filter((t) => matchesYear(t, yearFilter)),
-    [tests, yearFilter],
+    () => tests.filter((t) => matchesYearRange(t, yearRange)),
+    [tests, yearRange],
   );
 
   /**
@@ -172,9 +176,9 @@ export function DashboardPage() {
   const scopedTests = useMemo(
     () =>
       candidateTests.map((t) =>
-        applyYearScope(t, yearFilter, rawCurveById.get(t.id) ?? null),
+        applyYearRangeScope(t, yearRange, rawCurveById.get(t.id) ?? null),
       ),
-    [candidateTests, yearFilter, rawCurveById],
+    [candidateTests, yearRange, rawCurveById],
   );
 
   // ── Top 10 by current rank ─────────────────────────────────────────
@@ -220,12 +224,39 @@ export function DashboardPage() {
     [selectedIds, tests],
   );
 
-  /** UTC [Jan 1, Jan 1+1y) of the selected year, when year-scoped. */
+  /**
+   * Highlight band bounds for the equity chart. Resolves the active
+   * range to a finite epoch window, clamping open ends to the actual
+   * data span of the selected tests so the box stays inside the
+   * chart's visible x-axis.
+   */
   const yearHighlight = useMemo<[number, number] | undefined>(() => {
-    if (!isYearScoped) return undefined;
-    const y = yearFilter as number;
-    return [Date.UTC(y, 0, 1), Date.UTC(y + 1, 0, 1)];
-  }, [isYearScoped, yearFilter]);
+    const w = normaliseRange(yearRange);
+    if (w == null) return undefined;
+    // Find the data span across selected tests' raw (un-scoped) curves.
+    let dataMin = Infinity;
+    let dataMax = -Infinity;
+    for (const id of selectedIds) {
+      const raw = tests.find((t) => t.id === id);
+      if (!raw) continue;
+      for (const p of raw.equity_curve) {
+        const ts = Date.parse(p.t);
+        if (!Number.isFinite(ts)) continue;
+        if (ts < dataMin) dataMin = ts;
+        if (ts > dataMax) dataMax = ts;
+      }
+    }
+    if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) {
+      return undefined;
+    }
+    const start = Number.isFinite(w.from)
+      ? Date.UTC(w.from, 0, 1)
+      : dataMin;
+    const end = Number.isFinite(w.to)
+      ? Date.UTC(w.to + 1, 0, 1)
+      : dataMax;
+    return [start, end];
+  }, [yearRange, selectedIds, tests]);
 
   const overlays = useMemo(() => {
     // Overlays use the *un-scoped* curves so the chart shows each
@@ -425,17 +456,44 @@ export function DashboardPage() {
 
               <div className="flex flex-col gap-1">
                 <span className="text-term-muted text-[10px] uppercase tracking-wider">
-                  Year
+                  From year
                 </span>
                 <Select
-                  value={String(yearFilter)}
+                  value={String(yearRange.from)}
                   onChange={(e) => {
                     const v = e.target.value;
-                    setYearFilter(v === ALL_YEARS ? ALL_YEARS : Number(v));
+                    setYearRange((r) => ({
+                      ...r,
+                      from: v === ALL_YEARS ? ALL_YEARS : Number(v),
+                    }));
                     setAutoMode(true);
                   }}
                 >
-                  <option value={ALL_YEARS}>— all —</option>
+                  <option value={ALL_YEARS}>— start —</option>
+                  {yearOptions.map((y) => (
+                    <option key={y} value={String(y)}>
+                      {y}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                  To year
+                </span>
+                <Select
+                  value={String(yearRange.to)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setYearRange((r) => ({
+                      ...r,
+                      to: v === ALL_YEARS ? ALL_YEARS : Number(v),
+                    }));
+                    setAutoMode(true);
+                  }}
+                >
+                  <option value={ALL_YEARS}>— end —</option>
                   {yearOptions.map((y) => (
                     <option key={y} value={String(y)}>
                       {y}
@@ -449,7 +507,10 @@ export function DashboardPage() {
                   <span className="text-term-muted text-[10px] uppercase tracking-wider">
                     Scope
                   </span>
-                  <ScopeChip year={yearFilter as number} status={rawStatus} />
+                  <ScopeChip
+                    label={formatRange(yearRange)}
+                    status={rawStatus}
+                  />
                 </div>
               ) : null}
 
@@ -625,7 +686,7 @@ export function DashboardPage() {
                   height={360}
                   highlightRange={yearHighlight}
                   highlightLabel={
-                    isYearScoped ? String(yearFilter) : undefined
+                    isYearScoped ? formatRange(yearRange) : undefined
                   }
                   initialBalances={selectedRaw
                     .map((t, i) =>
@@ -932,10 +993,11 @@ function shortLabel(t: Test): string {
  *   - APPROX → raw fetch failed / unavailable; showing approximate
  */
 function ScopeChip({
-  year,
+  label,
   status,
 }: {
-  year: number;
+  /** Range label (e.g. `"2020–2022"`, `"2024"`, `"≤2022"`). */
+  label: string;
   status: 'idle' | 'loading' | 'ready' | 'error';
 }) {
   if (status === 'loading') {
@@ -947,7 +1009,7 @@ function ScopeChip({
           'Numbers shown are approximate until they finish loading.'
         }
       >
-        {year} · LOADING…
+        {label} · LOADING…
       </BracketedTag>
     );
   }
@@ -956,13 +1018,13 @@ function ScopeChip({
       <BracketedTag
         variant="paused"
         title={
-          'Could not load full-resolution curves for this year. ' +
+          'Could not load full-resolution curves for this range. ' +
           'Showing approximate values derived from the downsampled ' +
           'curve — Net PnL and drawdown stay close to MT5; profit ' +
           'factor, win rate and streak counts are coarser.'
         }
       >
-        {year} · APPROX
+        {label} · APPROX
       </BracketedTag>
     );
   }
@@ -972,11 +1034,11 @@ function ScopeChip({
     <BracketedTag
       variant="active"
       title={
-        'Year-scoped metrics are derived from the full-resolution ' +
-        'equity curve and match MT5 within rounding.'
+        'Range-scoped metrics are derived from the full-resolution ' +
+        'equity curves and match MT5 within rounding.'
       }
     >
-      {year} · RAW
+      {label} · RAW
     </BracketedTag>
   );
 }
