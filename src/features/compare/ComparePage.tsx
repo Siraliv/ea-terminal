@@ -18,6 +18,7 @@ import {
   type YearFilter,
 } from '@/lib/yearFilter';
 import { applyYearScope } from '@/lib/yearScope';
+import { rollUpRawStatus, useRawCurves } from '@/hooks/useRawCurve';
 
 /** Up to N tests at once. More than 5 overlapping curves is unreadable. */
 const MAX_SELECTED = 5;
@@ -184,19 +185,48 @@ export function ComparePage() {
     });
   }, [tests, eaFilter, yearFilter, search]);
 
+  const isYearScoped = yearFilter !== ALL_YEARS;
+
+  /**
+   * Un-scoped versions of the currently picked tests. Pre-computed
+   * once and reused for both the raw-curve fetch and the chart so
+   * the year filter doesn't ripple unnecessary refetches.
+   */
+  const selectedSource = useMemo(
+    () =>
+      selectedIds
+        .map((id) => tests.find((t) => t.id === id))
+        .filter((t): t is Test => !!t),
+    [tests, selectedIds],
+  );
+
+  /**
+   * Lazy-load full-resolution curves for the picked tests when a
+   * year filter is active, then thread them through `applyYearScope`
+   * so the per-test numbers (PnL, DD, PF, win rate, streaks) become
+   * exact rather than downsampled approximations.
+   */
+  const rawCurveSlots = useRawCurves(selectedSource, isYearScoped);
+  const rawStatus = useMemo(
+    () => rollUpRawStatus(rawCurveSlots),
+    [rawCurveSlots],
+  );
+  const rawCurveById = useMemo(() => {
+    const map = new Map<string, ReadonlyArray<{ t: string; b: number }> | null>();
+    for (const slot of rawCurveSlots) map.set(slot.testId, slot.data);
+    return map;
+  }, [rawCurveSlots]);
+
   // Resolve selection from the *raw* tests list, then project onto the
   // active year filter. When `yearFilter === 'all'` `applyYearScope` is
   // the identity transform, so this collapses to the original lookup.
   const selected = useMemo(
     () =>
-      selectedIds
-        .map((id) => tests.find((t) => t.id === id))
-        .filter((t): t is Test => !!t)
-        .map((t) => applyYearScope(t, yearFilter)),
-    [tests, selectedIds, yearFilter],
+      selectedSource.map((t) =>
+        applyYearScope(t, yearFilter, rawCurveById.get(t.id) ?? null),
+      ),
+    [selectedSource, yearFilter, rawCurveById],
   );
-
-  const isYearScoped = yearFilter !== ALL_YEARS;
 
   /**
    * Un-scoped versions of the selected tests. The chart renders these
@@ -331,20 +361,7 @@ export function ComparePage() {
                   </option>
                 ))}
               </Select>
-              {isYearScoped ? (
-                <BracketedTag
-                  variant="paused"
-                  title={
-                    'Year-scoped metrics are derived from the ' +
-                    'downsampled equity curve clipped to this year. ' +
-                    'Net PnL and drawdown stay close to MT5; profit ' +
-                    'factor, win rate and streak counts are ' +
-                    'approximations.'
-                  }
-                >
-                  APPROX
-                </BracketedTag>
-              ) : null}
+              {isYearScoped ? <ScopeChip status={rawStatus} /> : null}
             </div>
           </div>
           <div className="flex flex-col gap-1 md:col-span-2">
@@ -588,5 +605,55 @@ export function ComparePage() {
         </FramedPanel>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * Same status-aware chip used on the Dashboard. Communicates whether
+ * year-scoped metrics are RAW (from full-resolution Storage curves),
+ * still LOADING those curves, or APPROX (fall-back to downsampled).
+ */
+function ScopeChip({
+  status,
+}: {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+}) {
+  if (status === 'loading') {
+    return (
+      <BracketedTag
+        variant="paused"
+        title={
+          'Fetching full-resolution equity curves from Storage. ' +
+          'Numbers shown are approximate until they finish loading.'
+        }
+      >
+        LOADING…
+      </BracketedTag>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <BracketedTag
+        variant="paused"
+        title={
+          'Could not load full-resolution curves for the picked ' +
+          'tests. Showing approximate values derived from the ' +
+          'downsampled curve.'
+        }
+      >
+        APPROX
+      </BracketedTag>
+    );
+  }
+  return (
+    <BracketedTag
+      variant="active"
+      title={
+        'Year-scoped metrics are derived from the full-resolution ' +
+        'equity curves and match MT5 within rounding.'
+      }
+    >
+      RAW
+    </BracketedTag>
   );
 }

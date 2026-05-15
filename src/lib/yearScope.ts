@@ -1,5 +1,5 @@
 import type { Json } from '@/types/database';
-import type { Test } from '@/types/domain';
+import type { EquityPoint, Test } from '@/types/domain';
 import { ALL_YEARS, type YearFilter } from './yearFilter';
 
 /**
@@ -8,23 +8,33 @@ import { ALL_YEARS, type YearFilter } from './yearFilter';
  * Inputs:
  *   - `t`: a Test row with its persisted (LTTB-downsampled) curve.
  *   - `year`: the calendar year (UTC) to slice on.
+ *   - `rawCurve`: optional full-resolution curve fetched from
+ *     Storage. When present we project from this instead of the
+ *     downsampled curve and the result is the **true** per-year
+ *     PnL / drawdown / streaks — no approximation. Without it we
+ *     fall back to the downsampled `t.equity_curve` (caveat below).
  *
  * Outputs: a `Test`-shaped object whose `equity_curve` is clipped to
  * the year and whose headline / compound metrics are recomputed from
  * that clipped curve.
  *
- * **Caveat.** The persisted curve is ~500 points across the *full*
- * backtest period. A 1-year slice of a 10-year backtest is ~50
- * points, so Net PnL and max drawdown stay decent approximations
- * but profit factor / win rate / streak counts derived from
- * delta-by-delta walks are coarser than MT5's per-deal numbers.
- * Treat the scoped output as a directional comparison, not a
- * specification-grade audit. The UI surfaces this with a hint chip.
+ * **Caveat (downsampled fallback only).** The persisted curve is
+ * ~500 points across the *full* backtest period. A 1-year slice of
+ * a 10-year backtest is ~50 points, so Net PnL and max drawdown
+ * stay decent approximations but profit factor / win rate / streak
+ * counts are coarser than MT5's per-deal numbers. When `rawCurve`
+ * is supplied this caveat doesn't apply.
  */
-export function projectToYear(t: Test, year: number): Test {
+export function projectToYear(
+  t: Test,
+  year: number,
+  rawCurve?: readonly EquityPoint[] | null,
+): Test {
   const yStart = Date.UTC(year, 0, 1);
   const yEnd = Date.UTC(year + 1, 0, 1);
-  const inYear = t.equity_curve.filter((p) => {
+  const source: readonly EquityPoint[] =
+    rawCurve && rawCurve.length > 0 ? rawCurve : t.equity_curve;
+  const inYear = source.filter((p) => {
     const ts = Date.parse(p.t);
     return Number.isFinite(ts) && ts >= yStart && ts < yEnd;
   });
@@ -139,11 +149,16 @@ export function projectToYear(t: Test, year: number): Test {
 
 /**
  * Convenience wrapper: identity when `filter === ALL_YEARS`,
- * otherwise calls `projectToYear`.
+ * otherwise calls `projectToYear`. Pass `rawCurve` when available
+ * to get true (not approximated) per-year metrics.
  */
-export function applyYearScope(t: Test, filter: YearFilter): Test {
+export function applyYearScope(
+  t: Test,
+  filter: YearFilter,
+  rawCurve?: readonly EquityPoint[] | null,
+): Test {
   if (filter === ALL_YEARS) return t;
-  return projectToYear(t, filter);
+  return projectToYear(t, filter, rawCurve);
 }
 
 function stripConsecutive(

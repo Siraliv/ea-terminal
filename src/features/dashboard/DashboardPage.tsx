@@ -26,6 +26,7 @@ import {
   type YearFilter,
 } from '@/lib/yearFilter';
 import { applyYearScope } from '@/lib/yearScope';
+import { rollUpRawStatus, useRawCurves } from '@/hooks/useRawCurve';
 
 // ─────────────────────────────────────────────────────────────────────
 // Constants
@@ -134,17 +135,46 @@ export function DashboardPage() {
   const isYearScoped = yearFilter !== ALL_YEARS;
 
   /**
+   * Year-matching candidate tests (full set used for projection).
+   * Computed before raw fetch so the hook can size its query batch.
+   */
+  const candidateTests = useMemo(
+    () => tests.filter((t) => matchesYear(t, yearFilter)),
+    [tests, yearFilter],
+  );
+
+  /**
+   * Lazily fetch each candidate test's full-resolution raw curve from
+   * Storage when a year is selected. The first time a year filter is
+   * applied, this triggers a parallel batch of downloads; results are
+   * cached per-test forever (raw curves are immutable). When the user
+   * is on "all years" the fetch is skipped — the headline fields on
+   * each row are already MT5's authoritative full-period numbers.
+   */
+  const rawCurveSlots = useRawCurves(candidateTests, isYearScoped);
+  const rawStatus = useMemo(
+    () => rollUpRawStatus(rawCurveSlots),
+    [rawCurveSlots],
+  );
+  const rawCurveById = useMemo(() => {
+    const map = new Map<string, ReadonlyArray<{ t: string; b: number }> | null>();
+    for (const slot of rawCurveSlots) map.set(slot.testId, slot.data);
+    return map;
+  }, [rawCurveSlots]);
+
+  /**
    * Tests projected onto the selected year. When `yearFilter === 'all'`
    * this is the identity transform and each entry === the original.
    * Otherwise each test's curve and headline metrics are recomputed
-   * over the year-clipped subset — see `lib/yearScope.ts`.
+   * from its raw curve (true values) when loaded, falling back to
+   * the downsampled curve (approximate) otherwise.
    */
   const scopedTests = useMemo(
     () =>
-      tests
-        .filter((t) => matchesYear(t, yearFilter))
-        .map((t) => applyYearScope(t, yearFilter)),
-    [tests, yearFilter],
+      candidateTests.map((t) =>
+        applyYearScope(t, yearFilter, rawCurveById.get(t.id) ?? null),
+      ),
+    [candidateTests, yearFilter, rawCurveById],
   );
 
   // ── Top 10 by current rank ─────────────────────────────────────────
@@ -419,17 +449,7 @@ export function DashboardPage() {
                   <span className="text-term-muted text-[10px] uppercase tracking-wider">
                     Scope
                   </span>
-                  <BracketedTag
-                    variant="paused"
-                    title={
-                      'Metrics are derived from the downsampled equity curve ' +
-                      'clipped to this year. Net PnL and drawdown stay close ' +
-                      "to MT5's figures; profit factor, win rate, and streak " +
-                      'counts are approximations.'
-                    }
-                  >
-                    {String(yearFilter)} · APPROX
-                  </BracketedTag>
+                  <ScopeChip year={yearFilter as number} status={rawStatus} />
                 </div>
               ) : null}
 
@@ -902,6 +922,63 @@ function shortLabel(t: Test): string {
       ? ` SL${sl}/TP${tp}`
       : '';
   return `${name}${slTp}`;
+}
+
+/**
+ * Status chip rendered next to the year selector. Communicates
+ * whether the year-scoped numbers being shown are:
+ *   - RAW   → loaded from full-resolution Storage curves (true values)
+ *   - LOAD… → raw fetch in flight (showing approximate fallback)
+ *   - APPROX → raw fetch failed / unavailable; showing approximate
+ */
+function ScopeChip({
+  year,
+  status,
+}: {
+  year: number;
+  status: 'idle' | 'loading' | 'ready' | 'error';
+}) {
+  if (status === 'loading') {
+    return (
+      <BracketedTag
+        variant="paused"
+        title={
+          'Fetching full-resolution equity curves from Storage. ' +
+          'Numbers shown are approximate until they finish loading.'
+        }
+      >
+        {year} · LOADING…
+      </BracketedTag>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <BracketedTag
+        variant="paused"
+        title={
+          'Could not load full-resolution curves for this year. ' +
+          'Showing approximate values derived from the downsampled ' +
+          'curve — Net PnL and drawdown stay close to MT5; profit ' +
+          'factor, win rate and streak counts are coarser.'
+        }
+      >
+        {year} · APPROX
+      </BracketedTag>
+    );
+  }
+  // ready (or idle for tests without a raw_curve_path — those fall
+  // back to the downsampled curve silently)
+  return (
+    <BracketedTag
+      variant="active"
+      title={
+        'Year-scoped metrics are derived from the full-resolution ' +
+        'equity curve and match MT5 within rounding.'
+      }
+    >
+      {year} · RAW
+    </BracketedTag>
+  );
 }
 
 /**
