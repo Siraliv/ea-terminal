@@ -11,6 +11,12 @@ import {
 import { EquityCurveChart } from '@/components/charts/EquityCurveChart';
 import { useTestsList } from '@/hooks/useTests';
 import type { Test } from '@/types/domain';
+import {
+  ALL_YEARS,
+  availableYears,
+  matchesYear,
+  type YearFilter,
+} from '@/lib/yearFilter';
 
 /** Up to N tests at once. More than 5 overlapping curves is unreadable. */
 const MAX_SELECTED = 5;
@@ -134,7 +140,10 @@ export function ComparePage() {
   const { data: tests = [], isLoading, error } = useTestsList();
 
   const [eaFilter, setEaFilter] = useState<string>('');
+  const [yearFilter, setYearFilter] = useState<YearFilter>(ALL_YEARS);
   const [search, setSearch] = useState<string>('');
+
+  const yearOptions = useMemo(() => availableYears(tests), [tests]);
   const [selectedIds, setSelectedIds] = useState<string[]>(() => {
     const ids = searchParams.get('ids');
     return ids ? ids.split(',').filter(Boolean).slice(0, MAX_SELECTED) : [];
@@ -165,13 +174,14 @@ export function ComparePage() {
     const q = search.trim().toLowerCase();
     return tests.filter((t) => {
       if (eaFilter && t.ea_name !== eaFilter) return false;
+      if (!matchesYear(t, yearFilter)) return false;
       if (!q) return true;
       const hay = [t.ea_name, t.ea_version ?? '', t.symbol, t.timeframe ?? '']
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [tests, eaFilter, search]);
+  }, [tests, eaFilter, yearFilter, search]);
 
   const selected = useMemo(
     () =>
@@ -256,7 +266,7 @@ export function ComparePage() {
           </span>
         }
       >
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
           <div className="flex flex-col gap-1">
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
               EA
@@ -269,6 +279,25 @@ export function ComparePage() {
               {eaOptions.map((ea) => (
                 <option key={ea} value={ea}>
                   {ea}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-term-muted text-[10px] uppercase tracking-wider">
+              Year
+            </span>
+            <Select
+              value={String(yearFilter)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setYearFilter(v === ALL_YEARS ? ALL_YEARS : Number(v));
+              }}
+            >
+              <option value={ALL_YEARS}>— all —</option>
+              {yearOptions.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
                 </option>
               ))}
             </Select>

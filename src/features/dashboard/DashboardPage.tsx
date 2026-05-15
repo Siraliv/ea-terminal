@@ -19,6 +19,12 @@ import {
 import { useTestsList } from '@/hooks/useTests';
 import { useEaSchemasList } from '@/hooks/useEaSchemas';
 import type { Test } from '@/types/domain';
+import {
+  ALL_YEARS,
+  availableYears,
+  matchesYear,
+  type YearFilter,
+} from '@/lib/yearFilter';
 
 // ─────────────────────────────────────────────────────────────────────
 // Constants
@@ -118,15 +124,23 @@ export function DashboardPage() {
   const { data: schemas = [] } = useEaSchemasList();
 
   const [rankBy, setRankBy] = useState<RankKey>('profit_factor');
+  const [yearFilter, setYearFilter] = useState<YearFilter>(ALL_YEARS);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   /** True until the user manually toggles — controls auto-selection. */
   const [autoMode, setAutoMode] = useState(true);
+
+  const yearOptions = useMemo(() => availableYears(tests), [tests]);
 
   // ── Top 10 by current rank ─────────────────────────────────────────
   const top10 = useMemo(() => {
     const opt = RANK_OPTIONS.find((o) => o.value === rankBy)!;
     return tests
-      .filter((t) => t.status === 'active' && t[rankBy] != null)
+      .filter(
+        (t) =>
+          t.status === 'active' &&
+          t[rankBy] != null &&
+          matchesYear(t, yearFilter),
+      )
       .slice()
       .sort((a, b) => {
         const av = a[rankBy] as number;
@@ -134,7 +148,7 @@ export function DashboardPage() {
         return opt.higherIsBetter ? bv - av : av - bv;
       })
       .slice(0, 10);
-  }, [tests, rankBy]);
+  }, [tests, rankBy, yearFilter]);
 
   // ── Auto-apply top 3 whenever rankBy changes (or in auto mode and
   //    the top 10 changes via a refetch) ───────────────────────────
@@ -335,6 +349,27 @@ export function DashboardPage() {
                   {RANK_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                  Year
+                </span>
+                <Select
+                  value={String(yearFilter)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setYearFilter(v === ALL_YEARS ? ALL_YEARS : Number(v));
+                    setAutoMode(true);
+                  }}
+                >
+                  <option value={ALL_YEARS}>— all —</option>
+                  {yearOptions.map((y) => (
+                    <option key={y} value={String(y)}>
+                      {y}
                     </option>
                   ))}
                 </Select>
