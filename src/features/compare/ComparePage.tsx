@@ -199,39 +199,38 @@ export function ComparePage() {
   const isYearScoped = yearFilter !== ALL_YEARS;
 
   /**
-   * Full backtest x-range across the un-scoped versions of the selected
-   * tests. When a year filter is active we pass this to the chart so
-   * the time axis still spans the whole backtest while the lines only
-   * paint inside the selected year.
+   * Un-scoped versions of the selected tests. The chart renders these
+   * so the user sees each strategy's full arc; the active year window
+   * is rendered as a highlight band on top. Metric tiles + delta
+   * table still use the year-projected `selected`.
    */
-  const selectedFullRange = useMemo<[number, number] | undefined>(() => {
+  const selectedRaw = useMemo(
+    () =>
+      selectedIds
+        .map((id) => tests.find((t) => t.id === id))
+        .filter((t): t is Test => !!t),
+    [selectedIds, tests],
+  );
+
+  /** UTC [Jan 1, Jan 1+1y) of the selected year, when year-scoped. */
+  const yearHighlight = useMemo<[number, number] | undefined>(() => {
     if (!isYearScoped) return undefined;
-    let min = Infinity;
-    let max = -Infinity;
-    for (const id of selectedIds) {
-      const raw = tests.find((t) => t.id === id);
-      if (!raw) continue;
-      for (const p of raw.equity_curve) {
-        const ts = Date.parse(p.t);
-        if (!Number.isFinite(ts)) continue;
-        if (ts < min) min = ts;
-        if (ts > max) max = ts;
-      }
-    }
-    return Number.isFinite(min) && Number.isFinite(max) ? [min, max] : undefined;
-  }, [isYearScoped, selectedIds, tests]);
+    const y = yearFilter as number;
+    return [Date.UTC(y, 0, 1), Date.UTC(y + 1, 0, 1)];
+  }, [isYearScoped, yearFilter]);
 
   const overlays = useMemo(() => {
-    if (selected.length === 0) return [];
+    if (selectedRaw.length === 0) return [];
     // The first selected becomes the primary curve in the chart;
-    // remaining ones become overlays.
-    return selected.slice(1).map((t, i) => ({
+    // remaining ones become overlays. Both use the un-scoped curve so
+    // the active year is shown as a highlight, not a clipped slice.
+    return selectedRaw.slice(1).map((t, i) => ({
       id: t.id,
       label: shortLabel(t, i + 1),
       data: t.equity_curve,
       color: OVERLAY_COLORS[(i + 1) % OVERLAY_COLORS.length]!,
     }));
-  }, [selected]);
+  }, [selectedRaw]);
 
   const rows = useMemo(() => computeRows(selected), [selected]);
 
@@ -463,13 +462,16 @@ export function ComparePage() {
             ))}
           </div>
 
-          {selected[0] ? (
+          {selectedRaw[0] ? (
             <EquityCurveChart
-              data={selected[0].equity_curve}
+              data={selectedRaw[0].equity_curve}
               overlays={overlays}
               height={360}
-              xDomainOverride={selectedFullRange}
-              initialBalances={selected
+              highlightRange={yearHighlight}
+              highlightLabel={
+                isYearScoped ? String(yearFilter) : undefined
+              }
+              initialBalances={selectedRaw
                 .map((t, i) =>
                   t.initial_deposit != null
                     ? {

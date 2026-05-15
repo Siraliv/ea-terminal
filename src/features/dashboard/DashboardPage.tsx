@@ -177,37 +177,39 @@ export function DashboardPage() {
   );
 
   /**
-   * Un-scoped counterparts of `selected`, used to compute the chart's
-   * x-axis domain when a year filter is active. We want the line to
-   * narrow to the selected year while the time axis keeps spanning
-   * the full backtest, so the user can place that slice in context.
+   * Un-scoped counterparts of `selected`. The equity chart renders
+   * these (the full curve) so the user can see the strategy's whole
+   * arc; the year filter is then surfaced as a dashed-bordered
+   * highlight band on top of the chart rather than a clipped slice.
    */
-  const selectedFullRange = useMemo<[number, number] | undefined>(() => {
+  const selectedRaw = useMemo(
+    () =>
+      selectedIds
+        .map((id) => tests.find((t) => t.id === id))
+        .filter((t): t is Test => !!t),
+    [selectedIds, tests],
+  );
+
+  /** UTC [Jan 1, Jan 1+1y) of the selected year, when year-scoped. */
+  const yearHighlight = useMemo<[number, number] | undefined>(() => {
     if (!isYearScoped) return undefined;
-    let min = Infinity;
-    let max = -Infinity;
-    for (const id of selectedIds) {
-      const raw = tests.find((t) => t.id === id);
-      if (!raw) continue;
-      for (const p of raw.equity_curve) {
-        const ts = Date.parse(p.t);
-        if (!Number.isFinite(ts)) continue;
-        if (ts < min) min = ts;
-        if (ts > max) max = ts;
-      }
-    }
-    return Number.isFinite(min) && Number.isFinite(max) ? [min, max] : undefined;
-  }, [isYearScoped, selectedIds, tests]);
+    const y = yearFilter as number;
+    return [Date.UTC(y, 0, 1), Date.UTC(y + 1, 0, 1)];
+  }, [isYearScoped, yearFilter]);
 
   const overlays = useMemo(() => {
-    if (selected.length === 0) return [];
-    return selected.slice(1).map((t, i) => ({
+    // Overlays use the *un-scoped* curves so the chart shows each
+    // strategy's full arc; the active year window is rendered as a
+    // highlight band rather than a slice. Metric tiles continue to
+    // use the scoped values.
+    if (selectedRaw.length === 0) return [];
+    return selectedRaw.slice(1).map((t, i) => ({
       id: t.id,
       label: shortLabel(t),
       data: t.equity_curve,
       color: OVERLAY_COLORS[(i + 1) % OVERLAY_COLORS.length]!,
     }));
-  }, [selected]);
+  }, [selectedRaw]);
 
   const toggle = (id: string) => {
     setAutoMode(false);
@@ -596,13 +598,16 @@ export function DashboardPage() {
                 ))}
               </div>
 
-              {selected[0] ? (
+              {selectedRaw[0] ? (
                 <EquityCurveChart
-                  data={selected[0].equity_curve}
+                  data={selectedRaw[0].equity_curve}
                   overlays={overlays}
                   height={360}
-                  xDomainOverride={selectedFullRange}
-                  initialBalances={selected
+                  highlightRange={yearHighlight}
+                  highlightLabel={
+                    isYearScoped ? String(yearFilter) : undefined
+                  }
+                  initialBalances={selectedRaw
                     .map((t, i) =>
                       t.initial_deposit != null
                         ? {
