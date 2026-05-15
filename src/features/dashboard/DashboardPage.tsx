@@ -197,9 +197,22 @@ export function DashboardPage() {
 
   // ── Auto-apply top 3 whenever rankBy changes (or in auto mode and
   //    the top 10 changes via a refetch) ───────────────────────────
+  // Idempotent: the `top10` reference can change without the
+  // strategy ids changing (e.g. when raw-curve fetches resolve and
+  // re-project the metrics). Bail when the new id list matches the
+  // current selection so we don't re-render in a loop.
   useEffect(() => {
     if (!autoMode) return;
-    setSelectedIds(top10.slice(0, AUTO_TOP_N).map((t) => t.id));
+    const next = top10.slice(0, AUTO_TOP_N).map((t) => t.id);
+    setSelectedIds((cur) => {
+      if (
+        cur.length === next.length &&
+        cur.every((id, i) => id === next[i])
+      ) {
+        return cur;
+      }
+      return next;
+    });
   }, [autoMode, top10]);
 
   const selected = useMemo(
