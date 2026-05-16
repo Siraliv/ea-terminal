@@ -44,7 +44,41 @@ export interface Mt5Raw {
   sourceFilename: string;
 }
 
-const VERSION_RE = /\(v(\d{6})\)/i;
+/**
+ * Match a `vDDMMYY` version token anywhere in the EA name.
+ *
+ * Convention: a lower-case `v` followed by exactly six digits where
+ * the digits encode a day-month-year (`040525` = 4 May '25). Lives
+ * inside parens, after an underscore, after a hyphen, or as the
+ * leading token — any non-letter boundary on the left side works.
+ *
+ *   ✓ `US_SD_CON_MPS_TP_LIN_(v020525)` → 020525
+ *   ✓ `SD_REV_MPS_SL_LIN_v040525`      → 040525
+ *   ✓ `v040525_VARIANT`                → 040525
+ *   ✗ `mover123456`                    → letter before `v` blocks it
+ *   ✗ `v1234567`                       → 7th digit blocks it
+ *   ✗ `v999999`                        → caught by the DDMMYY validator
+ */
+const VERSION_RE = /(?:^|[^A-Za-z])v(\d{6})(?!\d)/i;
+
+/** Day 01-31, month 01-12, year 00-99 — guards against false `vNNNNNN` matches. */
+function isValidDdmmyy(s: string): boolean {
+  if (s.length !== 6) return false;
+  const d = Number(s.slice(0, 2));
+  const m = Number(s.slice(2, 4));
+  const y = Number(s.slice(4, 6));
+  return (
+    Number.isInteger(d) &&
+    Number.isInteger(m) &&
+    Number.isInteger(y) &&
+    d >= 1 &&
+    d <= 31 &&
+    m >= 1 &&
+    m <= 12 &&
+    y >= 0 &&
+    y <= 99
+  );
+}
 const PERIOD_RE =
   /^\s*([A-Za-z0-9]+)\s*\(\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*-\s*(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s*\)/;
 
@@ -186,7 +220,9 @@ export function coerceInputValue(raw: string): string | number | boolean {
 
 function parseIdentity(raw: Mt5Raw): Mt5Identity {
   const versionMatch = raw.expert.match(VERSION_RE);
-  const eaVersion = versionMatch ? versionMatch[1] ?? null : null;
+  const candidate = versionMatch?.[1] ?? null;
+  const eaVersion =
+    candidate && isValidDdmmyy(candidate) ? candidate : null;
 
   let timeframe: string | null = null;
   let periodStart: string | null = null;

@@ -26,8 +26,10 @@ describe('parseMt5HtmlString (real MT5 sample)', () => {
 
   it('extracts identity fields from the Settings block', () => {
     expect(result.identity.expertName).toBe('SD_REV_MPS_SL_LIN_v040525');
-    // No "(vDDMMYY)" parenthetical suffix on this expert name → null.
-    expect(result.identity.eaVersion).toBeNull();
+    // `_vDDMMYY` suffix is detected by the version regex (the `_`
+    // counts as a non-letter boundary, the 6 digits are a valid
+    // 04 May '25 date).
+    expect(result.identity.eaVersion).toBe('040525');
     expect(result.identity.symbol).toBe('US30_SPREAD_MEDIUM');
     expect(result.identity.timeframe).toBe('H1');
     expect(result.identity.periodStart).toBe('2015-01-01');
