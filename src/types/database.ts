@@ -61,6 +61,15 @@ export type TestRow = {
   raw_curve_path: string | null;
   file_hash: string | null;
   uploaded_at: string;
+
+  /**
+   * Short stable display label per row (e.g. `A1`, `B2`). Letter is
+   * assigned per unique ea_name in upload order; sequence increments
+   * per (user_id, ea_name). Nullable while the lazy backfill catches
+   * up — `formatTestLabel` falls back to a synthetic label until
+   * the patch lands.
+   */
+  test_code: string | null;
 };
 
 export type TestInsert = Omit<TestRow, 'id' | 'uploaded_at' | 'status'> & {

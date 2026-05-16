@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom';
 import { OfflineBanner, Sidebar } from '@/components/layout';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 import { useRealtimeSync } from '@/lib/realtime';
+import { useBackfillTestCodes } from '@/hooks/useBackfillTestCodes';
 
 /**
  * Top-level layout for every authenticated page: persistent sidebar on
@@ -24,6 +25,9 @@ import { useRealtimeSync } from '@/lib/realtime';
 export function AppShell() {
   const online = useOnlineStatus();
   const realtime = useRealtimeSync();
+  // Lazy backfill for tests missing the new `test_code` column.
+  // No-op once every row is coded (after the first session).
+  useBackfillTestCodes();
 
   return (
     <div className="min-h-screen bg-term-bg text-term-text flex flex-col">

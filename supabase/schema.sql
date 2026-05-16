@@ -56,7 +56,14 @@ create table if not exists public.tests (
   source_filename text,
   raw_curve_path  text,
   file_hash       text,
-  uploaded_at     timestamptz not null default now()
+  uploaded_at     timestamptz not null default now(),
+
+  -- Short display label like `A1`, `A2`, `B1`. Letter is assigned
+  -- per unique ea_name in upload order; sequence increments per
+  -- (user_id, ea_name) and is never reused after a row is deleted.
+  -- Composed at render time with symbol + version into a full
+  -- label like `US30-v040525-A1`.
+  test_code       text
 );
 
 -- Hash dedupe is per-user, not global (different users can upload same file).
@@ -73,6 +80,13 @@ create index if not exists tests_inputs_gin
   on public.tests using gin (inputs);
 create index if not exists tests_results_gin
   on public.tests using gin (results);
+
+-- Unique per-user test code. Nullable rows are tolerated so backfill
+-- can run gradually; once a code is set, it can't collide with
+-- another code on the same user.
+create unique index if not exists tests_user_code_uq
+  on public.tests (user_id, test_code)
+  where test_code is not null;
 
 -- ---- EA SCHEMAS ---------------------------------------------------
 -- Per-EA registry: which input keys exist, so the UI can render filters.

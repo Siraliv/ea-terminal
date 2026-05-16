@@ -30,6 +30,7 @@ import {
   type RankedPortfolio,
   type ScoreKey,
 } from '@/lib/portfolio';
+import { formatTestLabel } from '@/lib/testCode';
 import type { Test } from '@/types/domain';
 
 // ─────────────────────────────────────────────────────────────────
@@ -339,7 +340,7 @@ export function PortfolioPage() {
                   <th className="py-1 pr-2">Year</th>
                   <th className="py-1 pr-2">Combination</th>
                   <th className="py-1 pr-2 text-right">Score</th>
-                  <th className="py-1 pr-2 text-right">Net PnL</th>
+                  <th className="py-1 pr-2 text-right">Net %</th>
                   <th className="py-1 pr-2 text-right">Max DD</th>
                   <th className="py-1 pr-2"></th>
                 </tr>
@@ -353,15 +354,13 @@ export function PortfolioPage() {
                     <td className="py-1.5 pr-2 text-term-text tabular-nums">
                       {year}
                     </td>
-                    <td className="py-1.5 pr-2 text-term-muted truncate max-w-[480px]">
+                    <td className="py-1.5 pr-2 text-term-muted truncate max-w-[480px] font-mono">
                       {best
                         ? best.testIds
-                            .map(
-                              (id) =>
-                                tests.find((t) => t.id === id)?.ea_name ??
-                                '—',
+                            .map((id) => tests.find((t) => t.id === id))
+                            .map((t) =>
+                              t ? formatTestLabel(t) : '—',
                             )
-                            .map(cleanEaName)
                             .join('  +  ')
                         : '— insufficient data —'}
                     </td>
@@ -376,12 +375,12 @@ export function PortfolioPage() {
                     </td>
                     <td
                       className={`py-1.5 pr-2 text-right tabular-nums ${
-                        best && best.metrics.netPnl >= 0
+                        best && best.metrics.netPnlPct >= 0
                           ? 'text-term-pos'
                           : 'text-term-red'
                       }`}
                     >
-                      {best ? fmtMoney(best.metrics.netPnl) : '—'}
+                      {best ? fmtSignedPct(best.metrics.netPnlPct) : '—'}
                     </td>
                     <td className="py-1.5 pr-2 text-right text-term-amber tabular-nums">
                       {best
@@ -445,10 +444,9 @@ export function PortfolioPage() {
                     >
                       <span className="flex items-center gap-2 truncate">
                         <span aria-hidden="true">{picked ? '▣' : '▢'}</span>
-                        <span className="truncate">
-                          {cleanEaName(t.ea_name)}
+                        <span className="truncate text-term-text">
+                          {formatTestLabel(t)}
                         </span>
-                        <span className="text-term-dim">{t.symbol}</span>
                       </span>
                       <span className="tabular-nums text-term-muted shrink-0">
                         PF {fmtNum(t.profit_factor, 2)}
@@ -535,34 +533,28 @@ function RankedList({
 
           <div className="text-xs font-mono text-term-text">
             {r.testIds
-              .map(
-                (id) =>
-                  tests.find((t) => t.id === id)?.ea_name ?? '— missing —',
-              )
-              .map(cleanEaName)
+              .map((id) => tests.find((t) => t.id === id))
+              .map((t) => (t ? formatTestLabel(t) : '— missing —'))
               .join('  +  ')}
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs font-mono">
-            <Metric
-              label="Net PnL"
-              v={fmtMoney(r.metrics.netPnl)}
-              tone={r.metrics.netPnl >= 0 ? 'pos' : 'red'}
-            />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
             <Metric
               label="Net %"
-              v={`${r.metrics.netPnlPct.toFixed(1)}%`}
+              v={fmtSignedPct(r.metrics.netPnlPct)}
               tone={r.metrics.netPnlPct >= 0 ? 'pos' : 'red'}
             />
             <Metric
-              label="Max DD"
+              label="Max DD %"
               v={`${r.metrics.maxDrawdownPct.toFixed(1)}%`}
               tone="amber"
             />
             <Metric label="Lose run" v={`${r.metrics.maxLosingStreak}`} />
             <Metric
-              label="Lose $"
-              v={fmtMoney(r.metrics.maxLosingStreakPnl)}
+              label="Lose %"
+              v={fmtSignedPct(
+                (r.metrics.maxLosingStreakPnl / r.metrics.startCapital) * 100,
+              )}
               tone="red"
             />
           </div>
@@ -590,23 +582,24 @@ function ManualPreview({
       <EquityCurveChart
         data={preview.curve}
         height={260}
+        asPercent
         initialBalances={[
           {
             value: preview.metrics.startCapital,
             color: 'rgb(var(--term-muted))',
-            label: `Start $${preview.metrics.startCapital.toLocaleString()}`,
+            label: 'Start (0%)',
           },
         ]}
       />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <KpiTile
-          label="NET PNL"
-          value={fmtMoney(preview.metrics.netPnl)}
-          tone={preview.metrics.netPnl >= 0 ? 'positive' : 'negative'}
+          label="NET %"
+          value={fmtSignedPct(preview.metrics.netPnlPct)}
+          tone={preview.metrics.netPnlPct >= 0 ? 'positive' : 'negative'}
         />
         <KpiTile
-          label="MAX DD"
+          label="MAX DD %"
           value={`${preview.metrics.maxDrawdownPct.toFixed(1)}%`}
           tone="warn"
         />
@@ -616,8 +609,10 @@ function ManualPreview({
         />
         <KpiTile
           label="LOSE STREAK"
-          value={`${preview.metrics.maxLosingStreak} (${fmtMoney(
-            preview.metrics.maxLosingStreakPnl,
+          value={`${preview.metrics.maxLosingStreak} (${fmtSignedPct(
+            (preview.metrics.maxLosingStreakPnl /
+              preview.metrics.startCapital) *
+              100,
           )})`}
           tone="warn"
         />
@@ -638,7 +633,7 @@ function ManualPreview({
                 onClick={() => onOpen(t.id)}
                 className="text-term-text hover:underline truncate"
               >
-                {cleanEaName(t.ea_name)} · {t.symbol}
+                {formatTestLabel(t)}
               </button>
               <span className="text-term-dim tabular-nums shrink-0">
                 {(preview.weights[i]! * 100).toFixed(0)}%
@@ -682,19 +677,13 @@ function Metric({
 // Utilities
 // ─────────────────────────────────────────────────────────────────
 
-function fmtMoney(n: number | null | undefined): string {
+/** `+12.3%` / `-4.5%` — always shows a sign for clarity in side-by-side reads. */
+function fmtSignedPct(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';
-  return `$${n.toLocaleString(undefined, {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  })}`;
+  return `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`;
 }
 
 function fmtNum(n: number | null | undefined, digits = 2): string {
   if (n == null || !Number.isFinite(n)) return '—';
   return n.toFixed(digits);
-}
-
-function cleanEaName(name: string): string {
-  return name.replace(/\s*\(v\d{6}\)\s*$/, '').replace(/_+$/, '');
 }

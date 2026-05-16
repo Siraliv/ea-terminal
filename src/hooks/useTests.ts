@@ -13,6 +13,7 @@ import type { Json, TestInsert, TestRow } from '@/types/database';
 import type { Test, EquityCurve } from '@/types/domain';
 import type { Mt5Normalised } from '@/domain/mt5/types';
 import { useAuth } from '@/hooks/useAuth';
+import { nextCodeForEa } from '@/lib/testCode';
 
 /**
  * Narrow a stored TestRow into the typed `Test` domain shape.
@@ -162,7 +163,15 @@ export function useUploadTest(): UseMutationResult<
         throw new Error(`Raw curve upload failed: ${uploadErr.message}`);
       }
 
-      const insert: TestInsert = {
+      // Pull existing tests once so we can both compute a code and
+      // hand a stable snapshot to retry logic if there's a race.
+      const { data: userTestsRaw } = await supabase
+        .from('tests')
+        .select('*')
+        .eq('user_id', user.id);
+      const userTests = (userTestsRaw ?? []).map(rowToTest);
+
+      const buildInsert = (codeOverride?: string): TestInsert => ({
         id: testId,
         user_id: user.id,
         ea_name: parsed.identity.expertName,
@@ -195,32 +204,69 @@ export function useUploadTest(): UseMutationResult<
         source_filename: parsed.sourceFilename,
         raw_curve_path: rawPath,
         file_hash: hash,
-      };
+        test_code: codeOverride ?? nextCodeForEa(parsed.identity.expertName, userTests),
+      });
 
-      const { data, error } = await supabase
-        .from('tests')
-        .insert(insert)
-        .select()
-        .single();
-
-      if (error) {
-        // Race-loss path: another parallel upload of the same file
-        // beat us to the unique `(user_id, file_hash)` index. Clean
-        // up the orphan raw curve we just uploaded, fetch the row
-        // the winner inserted, and report it as a duplicate.
-        await supabase.storage.from('raw-curves').remove([rawPath]);
-        if (isUniqueViolation(error)) {
-          const { data: winner } = await supabase
-            .from('tests')
-            .select('*')
-            .eq('user_id', user.id)
-            .eq('file_hash', hash)
-            .maybeSingle();
-          if (winner) {
-            return { test: rowToTest(winner), duplicate: true };
-          }
+      // First-try insert with a freshly-computed code. If we lose the
+      // `(user_id, test_code)` race to a parallel upload of a
+      // different file targeting the same EA, refetch and bump the
+      // sequence once. Limit to 3 attempts so we can't loop forever
+      // on a misconfigured unique index.
+      let data: TestRow | null = null;
+      let error: unknown = null;
+      let attempt = 0;
+      let snapshot = userTests;
+      while (attempt < 3) {
+        const insert = buildInsert(
+          attempt === 0
+            ? undefined
+            : nextCodeForEa(parsed.identity.expertName, snapshot),
+        );
+        const res = await supabase
+          .from('tests')
+          .insert(insert)
+          .select()
+          .single();
+        if (!res.error) {
+          data = res.data;
+          error = null;
+          break;
         }
-        throw error;
+        error = res.error;
+        if (!isUniqueViolation(res.error)) break;
+        // Was it the file_hash race (caller already exists), or the
+        // test_code race (different file targeting same EA)?
+        const { data: byHash } = await supabase
+          .from('tests')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('file_hash', hash)
+          .maybeSingle();
+        if (byHash) {
+          // file_hash collision — the winner is the existing row.
+          // Clean up the orphan raw curve and report as duplicate.
+          await supabase.storage.from('raw-curves').remove([rawPath]);
+          return { test: rowToTest(byHash), duplicate: true };
+        }
+        // test_code collision — refresh snapshot and retry with a
+        // bumped sequence.
+        const { data: refreshed } = await supabase
+          .from('tests')
+          .select('*')
+          .eq('user_id', user.id);
+        snapshot = (refreshed ?? []).map(rowToTest);
+        attempt++;
+      }
+
+      if (error || !data) {
+        await supabase.storage.from('raw-curves').remove([rawPath]);
+        throw error instanceof Error
+          ? error
+          : new Error(
+              typeof error === 'object' && error && 'message' in error
+                ? String((error as { message: unknown }).message)
+                : 'Insert failed',
+            );
       }
 
       // Upsert the EA schema for this user.

@@ -65,6 +65,12 @@ export interface EquityCurveChartProps {
   highlightRange?: [number, number];
   /** Short label shown over the highlight (e.g. the selected year). */
   highlightLabel?: string;
+  /**
+   * When `true`, render Y-axis ticks and tooltip values as percent
+   * change from the chart's first data point instead of raw $.
+   * Useful for return-based comparison views (Portfolio preview).
+   */
+  asPercent?: boolean;
 }
 
 interface ChartRow {
@@ -88,7 +94,30 @@ export function EquityCurveChart({
   xDomainOverride,
   highlightRange,
   highlightLabel,
+  asPercent = false,
 }: EquityCurveChartProps) {
+  // Baseline for % conversion: each series is referenced to its own
+  // first non-null point so curves with different starting balances
+  // are visually comparable on the same axis.
+  const baselines = useMemo<Record<string, number>>(() => {
+    if (!asPercent) return {};
+    const map: Record<string, number> = {};
+    const firstPrimary = data.find((p) => Number.isFinite(p.b));
+    if (firstPrimary) map[PRIMARY_KEY] = firstPrimary.b;
+    for (const ov of overlays) {
+      const firstOv = ov.data.find((p) => Number.isFinite(p.b));
+      if (firstOv) map[ov.id] = firstOv.b;
+    }
+    return map;
+  }, [asPercent, data, overlays]);
+
+  /** Convert a raw $ value to a % display value, when in % mode. */
+  const toDisplay = (key: string, raw: number): number => {
+    if (!asPercent) return raw;
+    const base = baselines[key];
+    if (!base || base === 0) return 0;
+    return (raw / base - 1) * 100;
+  };
   // Dedupe starting balances. If every curve started at the same balance
   // we collapse to a single muted reference line; otherwise each curve
   // gets its own coloured line so the baseline is unambiguous.
@@ -111,7 +140,7 @@ export function EquityCurveChart({
     for (const p of data) {
       const ts = Date.parse(p.t);
       const existing = map.get(ts) ?? { ts, iso: p.t };
-      existing[PRIMARY_KEY] = p.b;
+      existing[PRIMARY_KEY] = toDisplay(PRIMARY_KEY, p.b);
       map.set(ts, existing);
     }
 
@@ -119,13 +148,18 @@ export function EquityCurveChart({
       for (const p of ov.data) {
         const ts = Date.parse(p.t);
         const existing = map.get(ts) ?? { ts, iso: p.t };
-        existing[ov.id] = p.b;
+        existing[ov.id] = toDisplay(ov.id, p.b);
         map.set(ts, existing);
       }
     }
 
     return Array.from(map.values()).sort((a, b) => a.ts - b.ts);
-  }, [data, overlays]);
+    // `toDisplay` is purely a function of `asPercent` + `baselines`,
+    // both already captured in this closure — exhaustive-deps wants
+    // both listed but they're the same identity as `data`/`overlays`
+    // refresh, so a single dep change recomputes correctly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, overlays, asPercent, baselines]);
 
   const xDomain = useMemo<[number, number] | undefined>(() => {
     if (xDomainOverride) return xDomainOverride;
@@ -159,7 +193,12 @@ export function EquityCurveChart({
           axisLine={axisLine}
           tickLine={false}
           width={68}
-          tickFormatter={compactMoney}
+          tickFormatter={
+            asPercent
+              ? (v: number) =>
+                  `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`
+              : compactMoney
+          }
           domain={['auto', 'auto']}
         />
         <Tooltip
@@ -184,10 +223,12 @@ export function EquityCurveChart({
                 format={({ name, value }) => {
                   const v =
                     typeof value === 'number'
-                      ? `$${value.toLocaleString(undefined, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 0,
-                        })}`
+                      ? asPercent
+                        ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+                        : `$${value.toLocaleString(undefined, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 0,
+                          })}`
                       : String(value);
                   return name ? `${name}: ${v}` : v;
                 }}
