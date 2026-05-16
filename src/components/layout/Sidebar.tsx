@@ -14,6 +14,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/tests', label: 'TESTS' },
   { to: '/compare', label: 'COMPARE' },
   { to: '/eas', label: 'EAs' },
+  { to: '/portfolio', label: 'PORTFOLIO' },
 ];
 
 const EXTRA_ITEMS: NavItem[] = [{ to: '/system', label: 'SYSTEM' }];
