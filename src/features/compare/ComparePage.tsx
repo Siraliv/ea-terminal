@@ -544,21 +544,11 @@ export function ComparePage() {
               data={selectedRaw[0].equity_curve}
               overlays={overlays}
               height={360}
+              asPercent
               highlightRange={yearHighlight}
               highlightLabel={
                 isYearScoped ? formatRange(yearRange) : undefined
               }
-              initialBalances={selectedRaw
-                .map((t, i) =>
-                  t.initial_deposit != null
-                    ? {
-                        value: t.initial_deposit,
-                        color:
-                          OVERLAY_COLORS[i % OVERLAY_COLORS.length]!,
-                      }
-                    : null,
-                )
-                .filter((m): m is { value: number; color: string } => m !== null)}
             />
           ) : null}
         </FramedPanel>

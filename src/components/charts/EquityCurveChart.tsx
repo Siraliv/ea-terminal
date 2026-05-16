@@ -121,7 +121,15 @@ export function EquityCurveChart({
   // Dedupe starting balances. If every curve started at the same balance
   // we collapse to a single muted reference line; otherwise each curve
   // gets its own coloured line so the baseline is unambiguous.
+  //
+  // In `asPercent` mode the y-axis is in % (each series referenced to
+  // its own first point), so the raw $ marker values from the caller
+  // aren't meaningful here. Replace them with a single horizontal
+  // baseline at y=0 — the "everyone starts at break-even" line.
   const balanceLines = useMemo<InitialBalanceMarker[]>(() => {
+    if (asPercent) {
+      return [{ value: 0, color: chartTheme.muted, label: 'Start (0%)' }];
+    }
     const list = (initialBalances ?? []).filter(
       (m): m is InitialBalanceMarker =>
         m != null && Number.isFinite(m.value),
@@ -132,7 +140,7 @@ export function EquityCurveChart({
       return [{ value: distinct[0]!, color: chartTheme.muted, label: 'Start' }];
     }
     return list;
-  }, [initialBalances]);
+  }, [asPercent, initialBalances]);
   const rows = useMemo<ChartRow[]>(() => {
     // Build a unified timeline keyed by epoch-ms across primary + overlays.
     const map = new Map<number, ChartRow>();

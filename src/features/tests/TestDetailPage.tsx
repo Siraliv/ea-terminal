@@ -340,16 +340,7 @@ export function TestDetailPage() {
         {test.equity_curve.length > 0 ? (
           <EquityCurveChart
             data={test.equity_curve}
-            initialBalances={
-              test.initial_deposit != null
-                ? [
-                    {
-                      value: test.initial_deposit,
-                      color: 'rgb(var(--term-pos))',
-                    },
-                  ]
-                : []
-            }
+            asPercent
           />
         ) : (
           <p className="text-term-muted text-sm">— no curve data —</p>
