@@ -8,6 +8,7 @@ import { TestsLibraryPage } from '@/features/tests/TestsLibraryPage';
 import { TestDetailPage } from '@/features/tests/TestDetailPage';
 import { ComparePage } from '@/features/compare/ComparePage';
 import { EAsPage } from '@/features/eas/EAsPage';
+import { SystemPage } from '@/features/system/SystemPage';
 
 /**
  * EA Terminal router.
@@ -41,6 +42,7 @@ const router = createBrowserRouter([
       { path: 'tests/:id', element: <TestDetailPage /> },
       { path: 'compare', element: <ComparePage /> },
       { path: 'eas', element: <EAsPage /> },
+      { path: 'system', element: <SystemPage /> },
       { path: '*', element: <Navigate to="/dashboard" replace /> },
     ],
   },

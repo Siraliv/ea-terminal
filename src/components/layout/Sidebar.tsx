@@ -16,7 +16,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/eas', label: 'EAs' },
 ];
 
-const EXTRA_ITEMS: NavItem[] = [];
+const EXTRA_ITEMS: NavItem[] = [{ to: '/system', label: 'SYSTEM' }];
 
 /**
  * Persistent left rail. Terminal-styled: pixel-font wordmark up top, five
@@ -64,17 +64,20 @@ export function Sidebar() {
             ))}
           </nav>
 
-          {/* Secondary (system) */}
+          {/* Theme picker — sits between the primary nav and the
+              SYSTEM section so the SECTIONS / THEME / SYSTEM stack
+              reads top-to-bottom. */}
+          <ThemePicker />
+
+          {/* Secondary (system) — placed below the theme picker per
+              the user's request. Currently surfaces the SYSTEM page
+              (infrastructure, quotas, data hotspots). */}
           <nav aria-label="System" className="flex flex-col gap-1">
             <SidebarSectionLabel>SYSTEM</SidebarSectionLabel>
             {EXTRA_ITEMS.map((item) => (
               <SidebarLink key={item.to} to={item.to} label={item.label} />
             ))}
           </nav>
-
-          {/* Theme picker — the user specifically requested this slot
-              between SYSTEM and SESSION in the original brief. */}
-          <ThemePicker />
 
           <div className="flex-1" />
 
