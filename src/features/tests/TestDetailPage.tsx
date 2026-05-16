@@ -5,12 +5,13 @@ import {
   BracketedButton,
   BracketedTag,
   FramedPanel,
+  Input,
   KV,
   Textarea,
 } from '@/components/ui';
 import { EquityCurveChart } from '@/components/charts/EquityCurveChart';
 import { useDeleteTest, useTest, useUpdateTest } from '@/hooks/useTests';
-import type { Json } from '@/types/database';
+import type { Json, TestInsert } from '@/types/database';
 import type { Test } from '@/types/domain';
 
 const SETTINGS_KEYS = [
@@ -143,6 +144,12 @@ export function TestDetailPage() {
   const [notesDraft, setNotesDraft] = useState<string>('');
   const [notesTouched, setNotesTouched] = useState(false);
 
+  // ── Identity edit mode ─────────────────────────────────────────
+  const [editingIdentity, setEditingIdentity] = useState(false);
+  const [identityDraft, setIdentityDraft] = useState<IdentityDraft>(
+    () => emptyIdentityDraft(),
+  );
+
   // Seed the notes draft from the loaded test. Re-seeds whenever the
   // server value changes (e.g. realtime UPDATE from another tab) —
   // but only while the user hasn't started editing locally. As soon
@@ -183,6 +190,31 @@ export function TestDetailPage() {
     const next = test.status === 'active' ? 'archived' : 'active';
     updateMut.mutate({ id: test.id, patch: { status: next } });
   }, [test, updateMut]);
+
+  const onStartEditIdentity = useCallback(() => {
+    if (!test) return;
+    setIdentityDraft(draftFromTest(test));
+    setEditingIdentity(true);
+  }, [test]);
+
+  const onCancelEditIdentity = useCallback(() => {
+    setEditingIdentity(false);
+    setIdentityDraft(emptyIdentityDraft());
+  }, []);
+
+  const onSaveIdentity = useCallback(() => {
+    if (!test) return;
+    const patch = patchFromDraft(identityDraft);
+    updateMut.mutate(
+      { id: test.id, patch },
+      {
+        onSuccess: () => {
+          setEditingIdentity(false);
+          setIdentityDraft(emptyIdentityDraft());
+        },
+      },
+    );
+  }, [test, updateMut, identityDraft]);
 
   const onDelete = useCallback(() => {
     if (!test) return;
@@ -383,38 +415,77 @@ export function TestDetailPage() {
 
       {/* SETTINGS */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <FramedPanel title="IDENTITY">
-          <div className="flex flex-col">
-            {SETTINGS_KEYS.map(([label, field]) => {
-              if (label === 'Period') {
-                return (
-                  <KV
-                    key={label}
-                    k={label}
-                    v={`${test.period_start ?? '—'} → ${test.period_end ?? '—'}`}
-                  />
-                );
-              }
-              const value = (test as unknown as Record<string, unknown>)[
-                field as string
-              ];
-              let display: string;
-              if (label === 'Initial Deposit') {
-                display = typeof value === 'number' ? money(value) : '—';
-              } else if (label === 'Uploaded') {
-                display =
-                  typeof value === 'string'
-                    ? new Date(value).toISOString().slice(0, 19).replace('T', ' ')
-                    : '—';
-              } else {
-                display =
-                  value == null || value === ''
-                    ? '—'
-                    : String(value);
-              }
-              return <KV key={label} k={label} v={display} />;
-            })}
-          </div>
+        <FramedPanel
+          title="IDENTITY"
+          titleRight={
+            editingIdentity ? (
+              <div className="flex items-center gap-2">
+                <BracketedButton
+                  variant="primary"
+                  size="sm"
+                  onClick={onSaveIdentity}
+                  disabled={updateMut.isPending}
+                >
+                  Save
+                </BracketedButton>
+                <BracketedButton
+                  variant="secondary"
+                  size="sm"
+                  onClick={onCancelEditIdentity}
+                  disabled={updateMut.isPending}
+                >
+                  Cancel
+                </BracketedButton>
+              </div>
+            ) : (
+              <BracketedButton
+                variant="secondary"
+                size="sm"
+                onClick={onStartEditIdentity}
+              >
+                Edit
+              </BracketedButton>
+            )
+          }
+        >
+          {editingIdentity ? (
+            <IdentityEditor
+              draft={identityDraft}
+              onChange={setIdentityDraft}
+            />
+          ) : (
+            <div className="flex flex-col">
+              {SETTINGS_KEYS.map(([label, field]) => {
+                if (label === 'Period') {
+                  return (
+                    <KV
+                      key={label}
+                      k={label}
+                      v={`${test.period_start ?? '—'} → ${test.period_end ?? '—'}`}
+                    />
+                  );
+                }
+                const value = (test as unknown as Record<string, unknown>)[
+                  field as string
+                ];
+                let display: string;
+                if (label === 'Initial Deposit') {
+                  display = typeof value === 'number' ? money(value) : '—';
+                } else if (label === 'Uploaded') {
+                  display =
+                    typeof value === 'string'
+                      ? new Date(value).toISOString().slice(0, 19).replace('T', ' ')
+                      : '—';
+                } else {
+                  display =
+                    value == null || value === ''
+                      ? '—'
+                      : String(value);
+                }
+                return <KV key={label} k={label} v={display} />;
+              })}
+            </div>
+          )}
         </FramedPanel>
 
         <FramedPanel
@@ -462,6 +533,160 @@ export function TestDetailPage() {
           ))}
         </div>
       </FramedPanel>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// IDENTITY editor
+// ─────────────────────────────────────────────────────────────────
+
+/**
+ * Local-only draft shape for the editable Identity fields. All values
+ * are strings (incl. `initial_deposit`) so inputs can hold partial /
+ * cleared content while the user is typing; we coerce to typed
+ * patch values in `patchFromDraft` at save time.
+ *
+ * Source / Filename / Uploaded are intentionally not editable — they
+ * describe the underlying upload, not the strategy identity, and
+ * mutating them would lie about provenance.
+ */
+interface IdentityDraft {
+  ea_name: string;
+  ea_version: string;
+  symbol: string;
+  timeframe: string;
+  period_start: string; // YYYY-MM-DD
+  period_end: string; // YYYY-MM-DD
+  broker: string;
+  currency: string;
+  initial_deposit: string; // free text → parsed at save
+  leverage: string;
+}
+
+function emptyIdentityDraft(): IdentityDraft {
+  return {
+    ea_name: '',
+    ea_version: '',
+    symbol: '',
+    timeframe: '',
+    period_start: '',
+    period_end: '',
+    broker: '',
+    currency: '',
+    initial_deposit: '',
+    leverage: '',
+  };
+}
+
+function draftFromTest(t: Test): IdentityDraft {
+  return {
+    ea_name: t.ea_name ?? '',
+    ea_version: t.ea_version ?? '',
+    symbol: t.symbol ?? '',
+    timeframe: t.timeframe ?? '',
+    period_start: t.period_start ?? '',
+    period_end: t.period_end ?? '',
+    broker: t.broker ?? '',
+    currency: t.currency ?? '',
+    initial_deposit:
+      typeof t.initial_deposit === 'number'
+        ? String(t.initial_deposit)
+        : '',
+    leverage: t.leverage ?? '',
+  };
+}
+
+/**
+ * Convert the string-only draft into a typed patch ready for
+ * `useUpdateTest`. Empty strings become `null` (clears the field);
+ * `initial_deposit` is loose-parsed so "100,000" / "100 000" both
+ * yield `100000`.
+ */
+function patchFromDraft(d: IdentityDraft): Partial<TestInsert> {
+  const optStr = (s: string) => {
+    const v = s.trim();
+    return v === '' ? null : v;
+  };
+  const deposit = parseLooseNumber(d.initial_deposit);
+  return {
+    ea_name: d.ea_name.trim() || '—',
+    ea_version: optStr(d.ea_version),
+    symbol: d.symbol.trim() || '—',
+    timeframe: optStr(d.timeframe),
+    period_start: optStr(d.period_start),
+    period_end: optStr(d.period_end),
+    broker: optStr(d.broker),
+    currency: optStr(d.currency),
+    initial_deposit: deposit,
+    leverage: optStr(d.leverage),
+  };
+}
+
+/** Tolerant number parser — strips spaces, NBSP and commas. */
+function parseLooseNumber(s: string): number | null {
+  const cleaned = s.replace(/[\s\u00A0,]/g, '').replace(/^\+/, '');
+  if (cleaned === '' || cleaned === '-') return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Form for editing the identity fields. Two-column label/input grid
+ * matching the visual density of the view-mode KV rows.
+ */
+function IdentityEditor({
+  draft,
+  onChange,
+}: {
+  draft: IdentityDraft;
+  onChange: (next: IdentityDraft) => void;
+}) {
+  const set = <K extends keyof IdentityDraft>(key: K, val: string) => {
+    onChange({ ...draft, [key]: val });
+  };
+
+  const rows: Array<{
+    label: string;
+    key: keyof IdentityDraft;
+    placeholder?: string;
+    type?: 'text' | 'date' | 'number';
+  }> = [
+    { label: 'EA', key: 'ea_name' },
+    { label: 'Version', key: 'ea_version', placeholder: '020525' },
+    { label: 'Symbol', key: 'symbol' },
+    { label: 'Timeframe', key: 'timeframe', placeholder: 'H1' },
+    { label: 'Period start', key: 'period_start', type: 'date' },
+    { label: 'Period end', key: 'period_end', type: 'date' },
+    { label: 'Broker', key: 'broker' },
+    { label: 'Currency', key: 'currency', placeholder: 'USD' },
+    {
+      label: 'Initial deposit',
+      key: 'initial_deposit',
+      placeholder: '100000',
+    },
+    { label: 'Leverage', key: 'leverage', placeholder: '1:100' },
+  ];
+
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map(({ label, key, placeholder, type }) => (
+        <div
+          key={key}
+          className="flex items-center gap-3 py-1 border-b border-dashed border-term-borderDim last:border-b-0"
+        >
+          <span className="text-term-muted text-xs uppercase tracking-wider w-32 shrink-0">
+            {label}
+          </span>
+          <Input
+            className="w-full"
+            type={type ?? 'text'}
+            value={draft[key]}
+            onChange={(e) => set(key, e.target.value)}
+            placeholder={placeholder}
+          />
+        </div>
+      ))}
     </div>
   );
 }
