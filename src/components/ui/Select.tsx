@@ -23,6 +23,10 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
   return (
     <span
       className={[
+        // `inline-flex` by default → sizes to content. Pass `w-full`
+        // (or `block`) from the call site when the dropdown sits in
+        // a grid cell and should fill the column, otherwise it stays
+        // a tight bracketed pill.
         'inline-flex items-center gap-1 font-mono text-term-text',
         'border-0 border-b bg-term-bg',
         ruleColor,
@@ -38,6 +42,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         ref={ref}
         {...rest}
         className={[
+          // `flex-1 min-w-0` lets the inner select absorb whatever
+          // width the wrapper has — content-sized when the wrapper is
+          // inline, full-width when the wrapper is `w-full`. Without
+          // these the inner stays content-sized and the bracket/chevron
+          // would float at the start of a stretched wrapper.
+          'flex-1 min-w-0',
           'appearance-none bg-term-bg text-term-text font-mono px-1 py-1 pr-3',
           'border-0 focus:outline-none',
           'disabled:text-term-dim',

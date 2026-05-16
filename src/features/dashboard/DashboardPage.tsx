@@ -453,6 +453,7 @@ export function DashboardPage() {
                   Rank by
                 </span>
                 <Select
+                  className="w-full"
                   value={rankBy}
                   onChange={(e) => {
                     setRankBy(e.target.value as RankKey);
@@ -472,6 +473,7 @@ export function DashboardPage() {
                   From year
                 </span>
                 <Select
+                  className="w-full"
                   value={String(yearRange.from)}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -496,6 +498,7 @@ export function DashboardPage() {
                   To year
                 </span>
                 <Select
+                  className="w-full"
                   value={String(yearRange.to)}
                   onChange={(e) => {
                     const v = e.target.value;

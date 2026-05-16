@@ -347,9 +347,17 @@ export function ComparePage() {
       <FramedPanel
         title="PICK TESTS"
         titleRight={
-          <span className="text-term-muted text-[10px] uppercase tracking-wider">
-            {selected.length} / {MAX_SELECTED}
-          </span>
+          <div className="flex items-center gap-2">
+            {isYearScoped ? (
+              <ScopeChip
+                label={formatRange(yearRange)}
+                status={rawStatus}
+              />
+            ) : null}
+            <span className="text-term-muted text-[10px] uppercase tracking-wider">
+              {selected.length} / {MAX_SELECTED}
+            </span>
+          </div>
         }
       >
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-3">
@@ -358,6 +366,7 @@ export function ComparePage() {
               EA
             </span>
             <Select
+              className="w-full"
               value={eaFilter}
               onChange={(e) => setEaFilter(e.target.value)}
             >
@@ -374,6 +383,7 @@ export function ComparePage() {
               From year
             </span>
             <Select
+              className="w-full"
               value={String(yearRange.from)}
               onChange={(e) => {
                 const v = e.target.value;
@@ -395,31 +405,24 @@ export function ComparePage() {
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
               To year
             </span>
-            <div className="flex items-center gap-2">
-              <Select
-                value={String(yearRange.to)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setYearRange((r) => ({
-                    ...r,
-                    to: v === ALL_YEARS ? ALL_YEARS : Number(v),
-                  }));
-                }}
-              >
-                <option value={ALL_YEARS}>— end —</option>
-                {yearOptions.map((y) => (
-                  <option key={y} value={String(y)}>
-                    {y}
-                  </option>
-                ))}
-              </Select>
-              {isYearScoped ? (
-                <ScopeChip
-                  label={formatRange(yearRange)}
-                  status={rawStatus}
-                />
-              ) : null}
-            </div>
+            <Select
+              className="w-full"
+              value={String(yearRange.to)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setYearRange((r) => ({
+                  ...r,
+                  to: v === ALL_YEARS ? ALL_YEARS : Number(v),
+                }));
+              }}
+            >
+              <option value={ALL_YEARS}>— end —</option>
+              {yearOptions.map((y) => (
+                <option key={y} value={String(y)}>
+                  {y}
+                </option>
+              ))}
+            </Select>
           </div>
           <div className="flex flex-col gap-1 md:col-span-2">
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
