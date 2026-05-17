@@ -31,16 +31,25 @@ export function ReportSummary({ report, onOpenFull }: ReportSummaryProps) {
               'risk-adjusted return (Sortino, 30%), drawdown depth & ' +
               'recovery (25%), drawdown duration (15%), diversification ' +
               'via avg correlation (15%), and annualised return (15%). ' +
+              'Validation deductions (leave-one-out fragility + ' +
+              'walk-forward overfit) can lower the score further. ' +
               'Open the full report for the breakdown.'
             }
           />
         </div>
-        <BracketedTag variant={variantForBand(report.band)}>
-          {report.band.toUpperCase()}
-        </BracketedTag>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <ValidationChip report={report} />
+          <BracketedTag variant={variantForBand(report.band)}>
+            {report.band.toUpperCase()}
+          </BracketedTag>
+        </div>
       </div>
 
-      <ScoreBar score={report.compositeScore} band={report.band} />
+      <ScoreBar
+        score={report.compositeScore}
+        rawScore={report.rawCompositeScore}
+        band={report.band}
+      />
 
       <p className="text-term-text text-sm leading-snug">
         {report.headline}
@@ -88,18 +97,26 @@ export function ReportSummary({ report, onOpenFull }: ReportSummaryProps) {
 
 /**
  * Horizontal score track with a marker showing where the composite
- * lands on the 0-10 scale. Ticks at 1/10 boundaries (in muted),
- * with a coloured marker at the actual score.
+ * lands on the 0-10 scale. Ticks at 1/10 boundaries (in muted).
+ *
+ * When `rawScore !== score` (validation deductions reduced the
+ * composite), a ghost marker shows the raw pre-deduction position
+ * and the readout below renders `8.1 → 5.6` to make the cause
+ * legible at a glance.
  */
 function ScoreBar({
   score,
+  rawScore,
   band,
 }: {
   score: number;
+  rawScore: number;
   band: ReportBand;
 }) {
   const pct = Math.max(0, Math.min(100, (score / 10) * 100));
+  const rawPct = Math.max(0, Math.min(100, (rawScore / 10) * 100));
   const tone = bandColorClass(band);
+  const deducted = Math.abs(rawScore - score) > 0.05;
   return (
     <div className="flex flex-col gap-1">
       <div className="relative h-2 bg-term-text/10">
@@ -111,6 +128,14 @@ function ScoreBar({
             style={{ left: `${i * 10}%` }}
           />
         ))}
+        {/* Ghost marker at the pre-deduction position. */}
+        {deducted ? (
+          <div
+            className="absolute top-0 bottom-0 w-1 border-l border-r border-term-muted opacity-40"
+            style={{ left: `calc(${rawPct}% - 2px)` }}
+            title={`Raw score before validation deductions: ${rawScore.toFixed(1)}`}
+          />
+        ) : null}
         {/* Marker — a thin vertical pillar in the band's tone. */}
         <div
           className={`absolute top-0 bottom-0 w-1 ${tone}`}
@@ -123,11 +148,79 @@ function ScoreBar({
       <div className="flex items-baseline justify-between text-[10px] font-mono">
         <span className="text-term-dim">0 · poor</span>
         <span className={`tabular-nums text-sm font-bold ${tone}`}>
-          {score.toFixed(1)} / 10
+          {deducted ? (
+            <>
+              <span className="text-term-muted line-through mr-1.5">
+                {rawScore.toFixed(1)}
+              </span>
+              <span>{score.toFixed(1)}</span>
+            </>
+          ) : (
+            `${score.toFixed(1)} / 10`
+          )}
         </span>
         <span className="text-term-dim">10 · excellent</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Pass/fail-style chip summarising the validation outcomes for the
+ * compact summary. One of:
+ *   - VALIDATED — both checks ran and the portfolio passed (stable +
+ *     no overfit)
+ *   - FRAGILE — leave-one-out stability is low
+ *   - OVERFIT — walk-forward IS/OOS gap is large
+ *   - FRAGILE+OVERFIT — both
+ *   - (nothing) — neither check ran (insufficient data)
+ */
+function ValidationChip({ report }: { report: PortfolioReport }) {
+  const loo = report.leaveOneOut;
+  const wf = report.walkForward;
+  const ranLoo = loo && loo.entries.length > 0;
+  const ranWf = wf && wf.folds.length > 0;
+  if (!ranLoo && !ranWf) return null;
+
+  const fragile = ranLoo && loo!.stabilityRatio < 0.5;
+  const overfit =
+    ranWf &&
+    (wf!.overfitGap >= 0.6 || wf!.negativeOosFolds > wf!.folds.length / 2);
+
+  if (!fragile && !overfit) {
+    return (
+      <BracketedTag
+        variant="active"
+        title={
+          (ranLoo
+            ? `Leave-one-out stability ${loo!.stabilityRatio.toFixed(2)}. `
+            : '') +
+          (ranWf
+            ? `Walk-forward IS/OOS gap ${wf!.overfitGap.toFixed(2)} across ${wf!.folds.length} folds.`
+            : '')
+        }
+      >
+        VALIDATED
+      </BracketedTag>
+    );
+  }
+  const labels: string[] = [];
+  if (fragile) labels.push('FRAGILE');
+  if (overfit) labels.push('OVERFIT');
+  return (
+    <BracketedTag
+      variant="breached"
+      title={
+        (fragile && loo
+          ? `Stability ${loo.stabilityRatio.toFixed(2)} — load-bearing constituent. `
+          : '') +
+        (overfit && wf
+          ? `Walk-forward gap ${wf.overfitGap.toFixed(2)} — optimiser is curve-fitting.`
+          : '')
+      }
+    >
+      {labels.join(' + ')}
+    </BracketedTag>
   );
 }
 

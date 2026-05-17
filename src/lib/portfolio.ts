@@ -590,3 +590,323 @@ export function findBestPortfolios(
   all.sort((a, b) => b.score - a.score);
   return all.slice(0, topN);
 }
+
+// ────────────────────────────────────────────────────────────────
+// Validation: leave-one-out + walk-forward
+// ────────────────────────────────────────────────────────────────
+
+export interface LeaveOneOutEntry {
+  /** Test id that was dropped from the portfolio. */
+  droppedTestId: string;
+  /** Sharpe of the remaining constituents (equal-weighted). */
+  sharpe: number;
+  /** Sortino of the remaining constituents. */
+  sortino: number;
+}
+
+export interface LeaveOneOutResult {
+  /** One entry per constituent. */
+  entries: LeaveOneOutEntry[];
+  /**
+   * Stability ratio = (minimum Sharpe across leave-one-out drops) ÷
+   * (Sharpe of the full portfolio). Close to 1 = robust (no single
+   * constituent is load-bearing); close to 0 (or negative) = fragile
+   * (the portfolio's score depends heavily on one constituent).
+   */
+  stabilityRatio: number;
+  /** Sharpe of the full portfolio (denominator of stabilityRatio). */
+  fullSharpe: number;
+  /** Test id of the load-bearing constituent (whose removal hurts most). */
+  loadBearingTestId: string | null;
+}
+
+/**
+ * Drop each constituent in turn, recompute Sharpe & Sortino on the
+ * remaining N-1 strategies (equal-weighted), and report which drops
+ * hurt the score most.
+ *
+ * Single-constituent inputs return an empty result — there's nothing
+ * to "drop" without going to zero strategies.
+ */
+export function leaveOneOut(
+  tests: readonly Test[],
+  startCapital = 100_000,
+): LeaveOneOutResult {
+  if (tests.length < 2) {
+    return {
+      entries: [],
+      stabilityRatio: 1,
+      fullSharpe: 0,
+      loadBearingTestId: null,
+    };
+  }
+
+  // Full-portfolio Sharpe as the denominator. Equal weights at every
+  // size keeps the comparison apples-to-apples.
+  const fullWeights = new Array<number>(tests.length).fill(1 / tests.length);
+  const full = combinePortfolio(tests, fullWeights, startCapital);
+  const fullMetrics = computeMetrics(full.curve, startCapital, full.correlation);
+  const fullSharpe = fullMetrics.sharpe;
+
+  const entries: LeaveOneOutEntry[] = tests.map((dropped, i) => {
+    const remaining = tests.filter((_, k) => k !== i);
+    const weights = new Array<number>(remaining.length).fill(
+      1 / remaining.length,
+    );
+    const { curve, correlation } = combinePortfolio(
+      remaining,
+      weights,
+      startCapital,
+    );
+    const m = computeMetrics(curve, startCapital, correlation);
+    return {
+      droppedTestId: dropped.id,
+      sharpe: m.sharpe,
+      sortino: m.sortino,
+    };
+  });
+
+  // Stability ratio: minimum Sharpe across drops vs full. Guard
+  // against zero-Sharpe full portfolios (would explode the ratio);
+  // in that case report 1 (everything's equally meaningless).
+  const minSharpe = Math.min(...entries.map((e) => e.sharpe));
+  const stabilityRatio =
+    Math.abs(fullSharpe) > 0.001 ? minSharpe / fullSharpe : 1;
+
+  // Load-bearing = constituent whose removal produces the lowest
+  // remaining Sharpe. Null tie-breaker shouldn't happen in practice.
+  let loadBearingTestId: string | null = null;
+  let worst = Infinity;
+  for (const e of entries) {
+    if (e.sharpe < worst) {
+      worst = e.sharpe;
+      loadBearingTestId = e.droppedTestId;
+    }
+  }
+
+  return { entries, stabilityRatio, fullSharpe, loadBearingTestId };
+}
+
+export interface WalkForwardFold {
+  /** 1-based fold number. */
+  fold: number;
+  /** ISO date of the start of the out-of-sample window. */
+  oosStart: string;
+  /** ISO date of the end of the OOS window. */
+  oosEnd: string;
+  /** Test ids of the combination chosen on in-sample data. */
+  chosenTestIds: string[];
+  /** Score of the chosen combo on in-sample data. */
+  inSampleScore: number;
+  /** Score of the same combo on out-of-sample data. */
+  outOfSampleScore: number;
+}
+
+export interface WalkForwardResult {
+  folds: WalkForwardFold[];
+  /** Mean IS score across folds. */
+  meanInSample: number;
+  /** Mean OOS score across folds. */
+  meanOutOfSample: number;
+  /**
+   * IS − OOS. Large positive numbers signal in-sample over-fitting —
+   * the optimiser is picking combos that work on training data but
+   * don't generalise. Negative values suggest the optimiser is
+   * conservative or the test windows have a regime tailwind.
+   */
+  overfitGap: number;
+  /** Number of folds where the OOS score was non-positive. */
+  negativeOosFolds: number;
+}
+
+/**
+ * Walk-forward validation for portfolio optimisation.
+ *
+ * Splits the timeline into K chronological folds. For each fold k
+ * from 2..K (the first fold is too thin to optimise on):
+ *   1. In-sample window = all data from fold 1..k-1.
+ *   2. Optimise the portfolio using only IS data — find the best
+ *      combination via `findBestPortfolios` with the supplied
+ *      candidates, sizes, and score.
+ *   3. Take that combo's test ids and re-evaluate it on the fold k
+ *      out-of-sample data.
+ *   4. Record IS and OOS scores.
+ *
+ * The aggregate IS/OOS gap is the credibility number: a healthy
+ * optimiser produces a gap close to 0; an over-fit one widens the
+ * gap dramatically. Even a "decent" gap of 0.3-0.6 is the price of
+ * any in-sample search, but anything above 1.0 is a red flag.
+ *
+ * Cost: K-1 optimiser runs of `findBestPortfolios`, each over a
+ * slightly larger IS slice. With K=5 and the page-default pool of
+ * 15 candidates × sizes 2-5, that's roughly 4 × 5,000 combos =
+ * 20,000 portfolio evaluations — runs in well under 5s.
+ */
+export function walkForward(
+  candidates: readonly Test[],
+  options: {
+    folds: number;
+    sizeMin: number;
+    sizeMax: number;
+    score: ScoreKey;
+    startCapital?: number;
+  },
+): WalkForwardResult {
+  const {
+    folds: foldCount,
+    sizeMin,
+    sizeMax,
+    score,
+    startCapital = 100_000,
+  } = options;
+
+  // Bail when we don't have enough data to meaningfully split.
+  if (candidates.length < sizeMin || foldCount < 2) {
+    return {
+      folds: [],
+      meanInSample: 0,
+      meanOutOfSample: 0,
+      overfitGap: 0,
+      negativeOosFolds: 0,
+    };
+  }
+
+  // Build the full timeline from the union of candidate curves.
+  const timeline = unionTimeline(candidates);
+  if (timeline.length < foldCount * 2) {
+    return {
+      folds: [],
+      meanInSample: 0,
+      meanOutOfSample: 0,
+      overfitGap: 0,
+      negativeOosFolds: 0,
+    };
+  }
+
+  // Chronological fold boundaries by equal time slicing (not equal
+  // point counts) — keeps each fold a comparable calendar window
+  // regardless of how the deals are distributed.
+  const tStart = timeline[0]!;
+  const tEnd = timeline[timeline.length - 1]!;
+  const span = tEnd - tStart;
+  const boundaries: number[] = Array.from(
+    { length: foldCount + 1 },
+    (_, i) => tStart + (span * i) / foldCount,
+  );
+
+  const fold_results: WalkForwardFold[] = [];
+
+  for (let k = 1; k < foldCount; k++) {
+    const isEnd = boundaries[k]!;
+    const oosStart = boundaries[k]!;
+    const oosEnd = boundaries[k + 1]!;
+
+    // Build IS / OOS slices of each candidate's curve.
+    const isCandidates = candidates
+      .map((t) => sliceTestByTime(t, tStart, isEnd))
+      .filter((t) => t.equity_curve.length >= 2);
+    const oosCandidatesById = new Map(
+      candidates
+        .map((t) => sliceTestByTime(t, oosStart, oosEnd))
+        .filter((t) => t.equity_curve.length >= 2)
+        .map((t) => [t.id, t]),
+    );
+
+    if (isCandidates.length < sizeMin) continue;
+
+    // Optimise on IS only.
+    const isTop = findBestPortfolios({
+      candidates: isCandidates,
+      sizeMin,
+      sizeMax,
+      topN: 1,
+      score,
+      startCapital,
+    });
+    const winner = isTop[0];
+    if (!winner) continue;
+
+    // Re-evaluate the winning combo on the OOS slice. Skip the fold
+    // entirely if any constituent has no OOS data — we can't fairly
+    // score a portfolio that didn't trade in that window.
+    const oosTests = winner.testIds.map((id) => oosCandidatesById.get(id));
+    if (oosTests.some((t) => !t)) continue;
+
+    const oosWeights = new Array<number>(winner.testIds.length).fill(
+      1 / winner.testIds.length,
+    );
+    const { curve: oosCurve, correlation: oosCorr } = combinePortfolio(
+      oosTests as Test[],
+      oosWeights,
+      startCapital,
+    );
+    const oosMetrics = computeMetrics(oosCurve, startCapital, oosCorr);
+    const oosScore = pickScore(oosMetrics, score);
+
+    fold_results.push({
+      fold: k,
+      oosStart: new Date(oosStart).toISOString(),
+      oosEnd: new Date(oosEnd).toISOString(),
+      chosenTestIds: winner.testIds,
+      inSampleScore: Number.isFinite(winner.score) ? winner.score : 0,
+      outOfSampleScore: Number.isFinite(oosScore) ? oosScore : 0,
+    });
+  }
+
+  if (fold_results.length === 0) {
+    return {
+      folds: [],
+      meanInSample: 0,
+      meanOutOfSample: 0,
+      overfitGap: 0,
+      negativeOosFolds: 0,
+    };
+  }
+
+  const meanIS =
+    fold_results.reduce((a, f) => a + f.inSampleScore, 0) /
+    fold_results.length;
+  const meanOOS =
+    fold_results.reduce((a, f) => a + f.outOfSampleScore, 0) /
+    fold_results.length;
+  const negative = fold_results.filter(
+    (f) => f.outOfSampleScore <= 0,
+  ).length;
+
+  return {
+    folds: fold_results,
+    meanInSample: meanIS,
+    meanOutOfSample: meanOOS,
+    overfitGap: meanIS - meanOOS,
+    negativeOosFolds: negative,
+  };
+}
+
+/**
+ * Union of all timestamps across a candidate set. Same logic used
+ * by `alignCurves`; exposed here as a helper so walk-forward can
+ * partition the same timeline the combiner uses.
+ */
+function unionTimeline(tests: readonly Test[]): number[] {
+  const s = new Set<number>();
+  for (const t of tests) {
+    for (const p of t.equity_curve) {
+      const ts = Date.parse(p.t);
+      if (Number.isFinite(ts)) s.add(ts);
+    }
+  }
+  return Array.from(s).sort((a, b) => a - b);
+}
+
+/**
+ * Return a shallow-cloned Test whose `equity_curve` is restricted
+ * to points in `[startMs, endMs)`. Used by walk-forward to slice
+ * candidates into IS / OOS windows without mutating the originals.
+ */
+function sliceTestByTime(t: Test, startMs: number, endMs: number): Test {
+  const clipped = t.equity_curve.filter((p) => {
+    const ts = Date.parse(p.t);
+    return Number.isFinite(ts) && ts >= startMs && ts < endMs;
+  });
+  return { ...t, equity_curve: clipped };
+}

@@ -190,6 +190,182 @@ export function FullReportModal({
           </FramedPanel>
         ) : null}
 
+        {/* Leave-one-out */}
+        {report.leaveOneOut && report.leaveOneOut.entries.length > 0 ? (
+          <FramedPanel
+            title="LEAVE-ONE-OUT — CONSTITUENT FRAGILITY"
+            titleRight={
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                stability {report.leaveOneOut.stabilityRatio.toFixed(2)}
+              </span>
+            }
+          >
+            <p className="text-term-text text-xs leading-snug mb-2">
+              Each row drops one constituent and re-evaluates the
+              remaining strategies at equal weights. A stable portfolio
+              shows similar Sharpe values across all rows; if one
+              dramatically lower row is the load-bearing strategy.
+              Stability ratio = lowest-after-drop Sharpe ÷ full Sharpe;
+              <span className="text-term-pos"> ≥ 0.75 robust</span>,
+              <span className="text-term-amber"> 0.25–0.75 fragile</span>,
+              <span className="text-term-red"> &lt; 0.25 single-strategy bet in disguise</span>.
+            </p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-term-muted text-[10px] uppercase tracking-wider text-left border-b border-dashed border-term-borderDim">
+                  <th className="py-1 pr-2">Dropped</th>
+                  <th className="py-1 pr-2 text-right">Sharpe without</th>
+                  <th className="py-1 pr-2 text-right">Sortino without</th>
+                  <th className="py-1 pr-2 text-right">Δ vs full</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.leaveOneOut.entries.map((e) => {
+                  const t = tests.find((x) => x.id === e.droppedTestId);
+                  const delta = e.sharpe - report.leaveOneOut!.fullSharpe;
+                  const isWorst =
+                    e.droppedTestId ===
+                    report.leaveOneOut!.loadBearingTestId;
+                  return (
+                    <tr
+                      key={e.droppedTestId}
+                      className={`border-b border-dashed border-term-borderDim/40 ${
+                        isWorst ? 'bg-term-red/10' : ''
+                      }`}
+                    >
+                      <td className="py-1.5 pr-2 text-term-text">
+                        {t ? formatTestLabel(t) : e.droppedTestId}
+                        {isWorst ? (
+                          <span className="text-term-red ml-2 text-[10px]">
+                            ← load-bearing
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right tabular-nums text-term-text">
+                        {e.sharpe.toFixed(2)}
+                      </td>
+                      <td className="py-1.5 pr-2 text-right tabular-nums text-term-muted">
+                        {e.sortino.toFixed(2)}
+                      </td>
+                      <td
+                        className={`py-1.5 pr-2 text-right tabular-nums ${
+                          delta >= 0 ? 'text-term-pos' : 'text-term-red'
+                        }`}
+                      >
+                        {delta >= 0 ? '+' : ''}
+                        {delta.toFixed(2)}
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr>
+                  <td className="py-1.5 pr-2 text-term-muted">
+                    (full portfolio)
+                  </td>
+                  <td className="py-1.5 pr-2 text-right tabular-nums text-term-text font-semibold">
+                    {report.leaveOneOut.fullSharpe.toFixed(2)}
+                  </td>
+                  <td className="py-1.5 pr-2" />
+                  <td className="py-1.5 pr-2" />
+                </tr>
+              </tbody>
+            </table>
+          </FramedPanel>
+        ) : null}
+
+        {/* Walk-forward */}
+        {report.walkForward && report.walkForward.folds.length > 0 ? (
+          <FramedPanel
+            title="WALK-FORWARD — IN-SAMPLE vs OUT-OF-SAMPLE"
+            titleRight={
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                gap {report.walkForward.overfitGap.toFixed(2)}
+              </span>
+            }
+          >
+            <p className="text-term-text text-xs leading-snug mb-2">
+              For each fold, the optimiser searches only data{' '}
+              <em>before</em> the fold (in-sample), then evaluates the
+              winning combo on the fold's data (out-of-sample). Large
+              IS↔OOS gaps mean the optimiser is picking combos that
+              don't generalise — i.e. curve-fitting.{' '}
+              <span className="text-term-pos">Gap &lt; 0.3 healthy</span>,
+              <span className="text-term-amber"> 0.3–1.0 expected</span>,
+              <span className="text-term-red"> &gt; 1.0 overfit</span>.
+            </p>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-term-muted text-[10px] uppercase tracking-wider text-left border-b border-dashed border-term-borderDim">
+                  <th className="py-1 pr-2">Fold</th>
+                  <th className="py-1 pr-2">Window</th>
+                  <th className="py-1 pr-2">IS combo</th>
+                  <th className="py-1 pr-2 text-right">IS</th>
+                  <th className="py-1 pr-2 text-right">OOS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {report.walkForward.folds.map((f) => (
+                  <tr
+                    key={f.fold}
+                    className="border-b border-dashed border-term-borderDim/40"
+                  >
+                    <td className="py-1.5 pr-2 text-term-dim tabular-nums">
+                      #{f.fold}
+                    </td>
+                    <td className="py-1.5 pr-2 text-term-muted tabular-nums">
+                      {f.oosStart.slice(0, 10)} → {f.oosEnd.slice(0, 10)}
+                    </td>
+                    <td className="py-1.5 pr-2 text-term-text truncate max-w-[200px]">
+                      {f.chosenTestIds
+                        .map((id) => tests.find((t) => t.id === id))
+                        .map((t) => (t ? formatTestLabel(t) : '—'))
+                        .join(' + ')}
+                    </td>
+                    <td
+                      className={`py-1.5 pr-2 text-right tabular-nums ${
+                        f.inSampleScore >= 0
+                          ? 'text-term-text'
+                          : 'text-term-red'
+                      }`}
+                    >
+                      {f.inSampleScore.toFixed(2)}
+                    </td>
+                    <td
+                      className={`py-1.5 pr-2 text-right tabular-nums ${
+                        f.outOfSampleScore >= 0
+                          ? 'text-term-pos'
+                          : 'text-term-red'
+                      }`}
+                    >
+                      {f.outOfSampleScore.toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+                <tr>
+                  <td className="py-2 pr-2 text-term-muted text-[10px] uppercase tracking-wider">
+                    mean
+                  </td>
+                  <td />
+                  <td />
+                  <td className="py-2 pr-2 text-right tabular-nums text-term-text font-semibold">
+                    {report.walkForward.meanInSample.toFixed(2)}
+                  </td>
+                  <td className="py-2 pr-2 text-right tabular-nums text-term-pos font-semibold">
+                    {report.walkForward.meanOutOfSample.toFixed(2)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            {report.walkForward.negativeOosFolds > 0 ? (
+              <p className="text-term-amber text-[11px] italic mt-2">
+                ⚠ {report.walkForward.negativeOosFolds} of{' '}
+                {report.walkForward.folds.length} folds had non-positive
+                out-of-sample scores.
+              </p>
+            ) : null}
+          </FramedPanel>
+        ) : null}
+
         {/* Warnings */}
         {report.warnings.length > 0 ? (
           <FramedPanel title="WARNINGS">
@@ -242,6 +418,10 @@ const GLOSSARY: Array<readonly [string, string]> = [
   ['Longest DD', 'Longest single continuous stretch spent below a prior peak, in days. Duration of pain.'],
   ['Time underwater', 'Fraction of the period spent below a prior peak. Most strategies sit 30–50%; > 80% is heavy.'],
   ['Avg corr', 'Average pairwise Pearson correlation between constituents. 0 = independent, 1 = lockstep.'],
+  ['Leave-one-out', 'Drop each constituent and re-score the rest. Reveals whether the portfolio depends on a single load-bearing strategy.'],
+  ['Stability ratio', 'Lowest leave-one-out Sharpe ÷ full-portfolio Sharpe. ≥ 0.75 robust, < 0.25 single-strategy bet.'],
+  ['Walk-forward', 'Optimise on past data, evaluate on the next slice. Repeated across chronological folds.'],
+  ['IS / OOS gap', 'In-sample minus out-of-sample average score. Large gap = the optimiser is curve-fitting; healthy gap is < 0.3.'],
 ];
 
 function variantForBand(band: ReportBand): 'active' | 'paused' | 'breached' {

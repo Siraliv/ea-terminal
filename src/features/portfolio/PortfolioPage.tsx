@@ -250,10 +250,21 @@ export function PortfolioPage() {
 
   // Composite Quality Score + narrative — computed only when there's
   // a previewable portfolio. Pure derivation; no side-effects.
+  //
+  // We hand `composeReport` the same candidate pool the page uses
+  // for AUTO so its walk-forward step optimises against the user's
+  // active selection criterion, not a hardcoded one. Validation is
+  // bounded by the same sizeMin/sizeMax knobs.
   const manualReport = useMemo<PortfolioReport | null>(() => {
     if (!manualPreview) return null;
-    return composeReport(manualPreview.metrics, manualTests);
-  }, [manualPreview, manualTests]);
+    return composeReport(manualPreview.metrics, manualTests, {
+      candidatePool: scopedPool,
+      scoreKey: score,
+      sizeMin: SIZE_MIN,
+      sizeMax: SIZE_MAX,
+      startCapital,
+    });
+  }, [manualPreview, manualTests, scopedPool, score, startCapital]);
 
   const toggleManual = useCallback((id: string) => {
     setManualIds((cur) => {

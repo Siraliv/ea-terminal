@@ -1,4 +1,11 @@
-import type { PortfolioMetrics } from './portfolio';
+import {
+  leaveOneOut,
+  walkForward,
+  type LeaveOneOutResult,
+  type PortfolioMetrics,
+  type ScoreKey,
+  type WalkForwardResult,
+} from './portfolio';
 import { formatTestLabel } from './testCode';
 import type { Test } from '@/types/domain';
 
@@ -51,6 +58,13 @@ export interface SubScore {
 export interface PortfolioReport {
   /** 0-10 composite, weighted average of sub-scores. */
   compositeScore: number;
+  /**
+   * Composite *before* the validation deductions (leave-one-out
+   * fragility, walk-forward overfit penalty). Exposed so the report
+   * can show "9.1 → 6.3 after validation" instead of hiding why the
+   * headline number dropped.
+   */
+  rawCompositeScore: number;
   /** One-word verdict matching the score band: Excellent / … / Poor. */
   band: ReportBand;
   /** One-line summary shown next to the composite bar. */
@@ -67,6 +81,17 @@ export interface PortfolioReport {
   recommendations: string[];
   /** Skepticism flags — overfit warnings, short backtest, etc. */
   warnings: string[];
+  /**
+   * Constituent leave-one-out fragility analysis. Only computed
+   * when `tests.length >= 2`. `null` otherwise.
+   */
+  leaveOneOut: LeaveOneOutResult | null;
+  /**
+   * Walk-forward overfit analysis. `null` when the candidate pool
+   * + timeline don't support a meaningful split (fewer than
+   * `WALK_FORWARD_FOLDS - 1` resolvable folds).
+   */
+  walkForward: WalkForwardResult | null;
 }
 
 export type ReportBand =
@@ -632,16 +657,114 @@ function warningsFor(m: PortfolioMetrics): string[] {
 }
 
 // ────────────────────────────────────────────────────────────────
+// Validation deductions
+// ────────────────────────────────────────────────────────────────
+
+/** Number of chronological folds used by the walk-forward step. */
+const WALK_FORWARD_FOLDS = 5;
+
+/**
+ * Translate the leave-one-out stability ratio into a 0..-2 point
+ * deduction on the composite. A robust portfolio (ratio ≥ 0.75)
+ * pays nothing; a fragile one (ratio < 0.25) loses the full 2
+ * points. The ratio can go negative when removing a constituent
+ * flips the sign — those get the max penalty too.
+ */
+function looDeduction(loo: LeaveOneOutResult | null): number {
+  if (!loo || loo.entries.length === 0) return 0;
+  if (loo.fullSharpe <= 0) return 0; // bad-Sharpe portfolios already scored low
+  const r = loo.stabilityRatio;
+  if (r >= 0.75) return 0;
+  if (r >= 0.5) return -0.5;
+  if (r >= 0.25) return -1;
+  return -2;
+}
+
+/**
+ * Translate the walk-forward IS/OOS gap into a 0..-3 point
+ * deduction. Some gap is expected from any in-sample search
+ * (typically 0.2-0.4); the penalty kicks in above 0.6 and saturates
+ * at 1.5 where the optimiser is clearly curve-fitting. Negative OOS
+ * folds add an extra fixed penalty.
+ */
+function wfDeduction(wf: WalkForwardResult | null): number {
+  if (!wf || wf.folds.length === 0) return 0;
+  const gap = wf.overfitGap;
+  let penalty = 0;
+  if (gap >= 1.5) penalty -= 2;
+  else if (gap >= 1.0) penalty -= 1.25;
+  else if (gap >= 0.6) penalty -= 0.5;
+  // Add a small extra penalty when OOS is outright bad across multiple folds.
+  if (wf.negativeOosFolds >= wf.folds.length / 2) penalty -= 1;
+  else if (wf.negativeOosFolds > 0) penalty -= 0.25;
+  return Math.max(penalty, -3);
+}
+
+/**
+ * Extra warnings derived from validation results — pasted into the
+ * existing `warnings` list after the metric-based ones.
+ */
+function validationWarnings(
+  loo: LeaveOneOutResult | null,
+  wf: WalkForwardResult | null,
+  tests: readonly Test[],
+): string[] {
+  const out: string[] = [];
+  if (loo && loo.entries.length > 0 && loo.stabilityRatio < 0.5) {
+    const bearer = tests.find((t) => t.id === loo.loadBearingTestId);
+    const label = bearer ? formatTestLabel(bearer) : 'one constituent';
+    out.push(
+      `Leave-one-out stability ${loo.stabilityRatio.toFixed(2)} — dropping ${label} would reduce Sharpe to ${Math.min(...loo.entries.map((e) => e.sharpe)).toFixed(2)}. The portfolio is fragile to that single strategy.`,
+    );
+  }
+  if (wf && wf.folds.length > 0) {
+    if (wf.overfitGap >= 1.0) {
+      out.push(
+        `Walk-forward gap ${wf.overfitGap.toFixed(2)} — in-sample Sharpe averages ${wf.meanInSample.toFixed(2)} but out-of-sample averages only ${wf.meanOutOfSample.toFixed(2)}. The optimiser is curve-fitting; treat the AUTO suggestions as starting points, not specifications.`,
+      );
+    }
+    if (wf.negativeOosFolds > wf.folds.length / 2) {
+      out.push(
+        `Walk-forward: ${wf.negativeOosFolds} of ${wf.folds.length} out-of-sample folds had non-positive Sharpe. The portfolio's edge is not reliable across time.`,
+      );
+    }
+  }
+  return out;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Public entry point
 // ────────────────────────────────────────────────────────────────
 
+export interface ComposeReportOptions {
+  /**
+   * Pool of candidate tests the walk-forward optimiser can pick from.
+   * Required for the validation step — typically the same pool that
+   * the page used to build the current portfolio.
+   */
+  candidatePool: readonly Test[];
+  /** Score function used for both leave-one-out and walk-forward. */
+  scoreKey: ScoreKey;
+  /** Min combination size for walk-forward optimiser. */
+  sizeMin: number;
+  /** Max combination size for walk-forward optimiser. */
+  sizeMax: number;
+  /** Capital seeded into combined portfolio computations. */
+  startCapital?: number;
+}
+
 /**
  * Generate the full report for a portfolio. Deterministic — same
- * metrics + tests always produce the same report.
+ * metrics + tests + options always produce the same report.
+ *
+ * When `options` is omitted, validation sections are skipped (the
+ * report still works, just without walk-forward / leave-one-out).
+ * Pass `options` to engage the credibility suite.
  */
 export function composeReport(
   metrics: PortfolioMetrics,
   tests: readonly Test[],
+  options?: ComposeReportOptions,
 ): PortfolioReport {
   const subList: SubScore[] = [
     scoreRiskAdjusted(metrics),
@@ -654,22 +777,57 @@ export function composeReport(
     subList.map((s) => [s.key, s]),
   ) as Record<SubScoreKey, SubScore>;
 
-  const composite = clamp(
+  const rawComposite = clamp(
     subList.reduce((acc, s) => acc + s.value * s.weight, 0),
     0,
     10,
   );
 
+  // ── Validation step (optional) ─────────────────────────────────
+  let loo: LeaveOneOutResult | null = null;
+  let wf: WalkForwardResult | null = null;
+  if (options) {
+    const startCap = options.startCapital ?? 100_000;
+    if (tests.length >= 2) {
+      loo = leaveOneOut(tests, startCap);
+    }
+    // Walk-forward needs the candidate pool to run a real
+    // optimiser per fold; if the caller only has the current
+    // combo, skip.
+    if (
+      options.candidatePool.length >= options.sizeMin &&
+      tests.length >= 2
+    ) {
+      wf = walkForward(options.candidatePool, {
+        folds: WALK_FORWARD_FOLDS,
+        sizeMin: options.sizeMin,
+        sizeMax: options.sizeMax,
+        score: options.scoreKey,
+        startCapital: startCap,
+      });
+    }
+  }
+
+  // Apply deductions and surface validation warnings.
+  const totalDeduction = looDeduction(loo) + wfDeduction(wf);
+  const finalComposite = clamp(rawComposite + totalDeduction, 0, 10);
+
+  const baseWarnings = warningsFor(metrics);
+  const valWarnings = validationWarnings(loo, wf, tests);
+
   return {
-    compositeScore: composite,
-    band: bandFor(composite),
-    headline: headlineFor(composite, subs, metrics),
+    compositeScore: finalComposite,
+    rawCompositeScore: rawComposite,
+    band: bandFor(finalComposite),
+    headline: headlineFor(finalComposite, subs, metrics),
     observations: observationsFor(subs, metrics),
     subScores: subList,
     strengths: strengthsFor(metrics),
     concerns: concernsFor(metrics),
     recommendations: recommendationsFor(metrics, tests),
-    warnings: warningsFor(metrics),
+    warnings: [...baseWarnings, ...valWarnings],
+    leaveOneOut: loo,
+    walkForward: wf,
   };
 }
 
@@ -711,6 +869,11 @@ ${constituents}
 
 ## Composite Quality Score (rules-based, source of truth)
 ${report.compositeScore.toFixed(1)} / 10 (${report.band}) — ${report.headline}
+${
+  report.rawCompositeScore !== report.compositeScore
+    ? `Raw score ${report.rawCompositeScore.toFixed(1)}, deducted to ${report.compositeScore.toFixed(1)} after validation.`
+    : ''
+}
 
 ## Sub-scores
 ${report.subScores
@@ -719,6 +882,20 @@ ${report.subScores
       `- ${s.label}: ${s.value.toFixed(1)} (weight ${(s.weight * 100).toFixed(0)}%) — ${s.rationale}`,
   )
   .join('\n')}
+
+## Leave-one-out
+${
+  report.leaveOneOut
+    ? `Stability ratio ${report.leaveOneOut.stabilityRatio.toFixed(2)} (full Sharpe ${report.leaveOneOut.fullSharpe.toFixed(2)})\n${report.leaveOneOut.entries.map((e) => `- drop ${e.droppedTestId}: Sharpe → ${e.sharpe.toFixed(2)}, Sortino → ${e.sortino.toFixed(2)}`).join('\n')}`
+    : 'not computed'
+}
+
+## Walk-forward
+${
+  report.walkForward && report.walkForward.folds.length > 0
+    ? `Folds: ${report.walkForward.folds.length}. IS mean ${report.walkForward.meanInSample.toFixed(2)} / OOS mean ${report.walkForward.meanOutOfSample.toFixed(2)} (gap ${report.walkForward.overfitGap.toFixed(2)}). ${report.walkForward.negativeOosFolds} negative OOS folds.`
+    : 'not computed'
+}
 `;
 }
 
