@@ -811,6 +811,212 @@ export function findBestPortfolios(
 }
 
 // ────────────────────────────────────────────────────────────────
+// Search: enumerate all combos (slim, metrics-only)
+// ────────────────────────────────────────────────────────────────
+
+export interface SearchEntry {
+  /** Constituent test ids in display order. */
+  testIds: string[];
+  /** Allocation weights matching `testIds`. */
+  weights: number[];
+  /** Computed metrics for this combo at equal-or-chosen weights. */
+  metrics: PortfolioMetrics;
+  /** Primary ranking score (under the supplied `score` key). */
+  score: number;
+}
+
+/**
+ * Enumerate every combination in the search space and return a slim
+ * entry per combo (metrics + score, no curve/correlation). Used by
+ * the Pareto frontier chart which needs all ~5,000 combos but can't
+ * afford to keep their full equity curves in memory.
+ *
+ * Same loop semantics as `findBestPortfolios`; the heavier function
+ * is now just `searchAllPortfolios` + augment-with-curve on the
+ * surviving top-N.
+ */
+export function searchAllPortfolios(opts: OptimizeOptions): SearchEntry[] {
+  const {
+    candidates,
+    sizeMin,
+    sizeMax,
+    score,
+    startCapital = 100_000,
+    weightScheme = 'equal',
+  } = opts;
+  if (candidates.length < sizeMin) return [];
+  const out: SearchEntry[] = [];
+  const upperK = Math.min(sizeMax, candidates.length);
+  const lowerK = Math.max(sizeMin, 2);
+  for (let k = lowerK; k <= upperK; k++) {
+    for (const combo of combinations(candidates, k)) {
+      const weights = computeWeights(combo, weightScheme);
+      const { curve, correlation } = combinePortfolio(
+        combo,
+        weights,
+        startCapital,
+      );
+      const metrics = computeMetrics(curve, startCapital, correlation);
+      const s = pickScore(metrics, score);
+      if (!Number.isFinite(s)) continue;
+      out.push({
+        testIds: combo.map((t) => t.id),
+        weights,
+        metrics,
+        score: s,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Walk a flat list of (risk, return) points and return only those
+ * on the upper-left Pareto frontier — for each risk level, no
+ * other point achieves a higher return at equal or lower risk.
+ *
+ * Used by the Pareto frontier chart to connect "efficient" portfolios
+ * with a line that traces the achievable risk/return frontier.
+ *
+ * Returns the frontier subset in ascending-risk order.
+ */
+export function paretoFrontier<T>(
+  items: readonly T[],
+  riskOf: (t: T) => number,
+  returnOf: (t: T) => number,
+): T[] {
+  const sorted = items
+    .slice()
+    .sort((a, b) => riskOf(a) - riskOf(b));
+  const frontier: T[] = [];
+  let bestReturn = -Infinity;
+  for (const it of sorted) {
+    const r = returnOf(it);
+    if (r > bestReturn) {
+      frontier.push(it);
+      bestReturn = r;
+    }
+  }
+  return frontier;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Decomposition: monthly returns + constituent contributions
+// ────────────────────────────────────────────────────────────────
+
+export interface MonthlyReturn {
+  year: number;
+  /** 0 = Jan, 11 = Dec. */
+  month: number;
+  /** Return for that month as a percentage. */
+  returnPct: number;
+}
+
+/**
+ * Bucket an equity curve into calendar months (UTC) and compute
+ * each month's return as `endBalance / prevMonthEndBalance - 1`.
+ *
+ * Returns one entry per month for which we can compute a return
+ * (i.e. every month after the first). The first month of the
+ * series has no prior to compare against and is omitted.
+ */
+export function monthlyReturns(
+  curve: readonly EquityPoint[],
+): MonthlyReturn[] {
+  if (curve.length < 2) return [];
+  // Keep the latest sample for each (year, month) bucket — that's
+  // the "end-of-month" balance for return calculations.
+  const lastInMonth = new Map<
+    string,
+    { ts: number; b: number; year: number; month: number }
+  >();
+  for (const p of curve) {
+    const ts = Date.parse(p.t);
+    if (!Number.isFinite(ts)) continue;
+    const d = new Date(ts);
+    const year = d.getUTCFullYear();
+    const month = d.getUTCMonth();
+    const key = `${year}-${month}`;
+    const existing = lastInMonth.get(key);
+    if (!existing || ts > existing.ts) {
+      lastInMonth.set(key, { ts, b: p.b, year, month });
+    }
+  }
+  const months = Array.from(lastInMonth.values()).sort(
+    (a, b) => a.ts - b.ts,
+  );
+  const out: MonthlyReturn[] = [];
+  for (let i = 1; i < months.length; i++) {
+    const prev = months[i - 1]!;
+    const cur = months[i]!;
+    const ret = prev.b > 0 ? cur.b / prev.b - 1 : 0;
+    out.push({ year: cur.year, month: cur.month, returnPct: ret * 100 });
+  }
+  return out;
+}
+
+export interface ConstituentContribution {
+  testId: string;
+  /** Cumulative % of starting capital this constituent has produced. */
+  series: { t: string; v: number }[];
+}
+
+/**
+ * Decompose a portfolio's cumulative return into per-constituent
+ * contributions, in % of starting capital.
+ *
+ * At each timestep, each constituent's dollar gain is
+ *   contribution_k = weight_k × return_k × portfolio_equity_prev
+ * Accumulated over time, the sum of constituent contributions equals
+ * the portfolio's cumulative dollar gain (exact, not approximate)
+ * because the weights are applied to per-step returns before
+ * compounding.
+ *
+ * The result is suitable for a stacked-area chart: stacking each
+ * constituent's series gives the total portfolio return curve.
+ */
+export function constituentContributions(
+  tests: readonly Test[],
+  weights: readonly number[],
+  startCapital = 100_000,
+): ConstituentContribution[] {
+  if (tests.length === 0) return [];
+  if (tests.length !== weights.length) {
+    throw new Error('weights length must match tests length');
+  }
+  const { timeline, returnsPerStep } = alignReturns(tests);
+  if (timeline.length === 0) return [];
+
+  const cum = new Array(tests.length).fill(0);
+  let equity = startCapital;
+  const out: ConstituentContribution[] = tests.map((t) => ({
+    testId: t.id,
+    series: [{ t: new Date(timeline[0]!).toISOString(), v: 0 }],
+  }));
+
+  for (let i = 1; i < timeline.length; i++) {
+    let stepReturn = 0;
+    for (let k = 0; k < tests.length; k++) {
+      const r = returnsPerStep[k]?.[i] ?? 0;
+      const dollarContrib = (weights[k] ?? 0) * r * equity;
+      cum[k] += dollarContrib;
+      stepReturn += (weights[k] ?? 0) * r;
+    }
+    equity = equity * (1 + stepReturn);
+    const tIso = new Date(timeline[i]!).toISOString();
+    for (let k = 0; k < tests.length; k++) {
+      // Express in % of the original starting capital, so summing
+      // bands gives portfolio total return %.
+      out[k]!.series.push({
+        t: tIso,
+        v: startCapital > 0 ? (cum[k]! / startCapital) * 100 : 0,
+      });
+    }
+  }
+  return out;
+}
+
+// ────────────────────────────────────────────────────────────────
 // Validation: leave-one-out + walk-forward
 // ────────────────────────────────────────────────────────────────
 

@@ -45,7 +45,11 @@ import {
 import { CorrelationMatrix } from './CorrelationMatrix';
 import { ReportSummary } from './ReportSummary';
 import { FullReportModal } from './FullReportModal';
+import { MonthlyReturnsHeatmap } from './MonthlyReturnsHeatmap';
+import { ContributionChart } from './ContributionChart';
+import { ParetoFrontier } from './ParetoFrontier';
 import { composeReport, type PortfolioReport } from '@/lib/portfolioReport';
+import { searchAllPortfolios, type SearchEntry } from '@/lib/portfolio';
 import type { Test } from '@/types/domain';
 
 // ─────────────────────────────────────────────────────────────────
@@ -171,6 +175,23 @@ export function PortfolioPage() {
       ),
     [candidatePool, yearRange, rawCurveById],
   );
+
+  // ── Pareto frontier — enumerate the whole search space ──────────
+  // Same iteration as `fullPeriodResults`, but slim entries (no
+  // curves) so we can keep all ~5,000 combos in memory. Used to
+  // plot the risk-vs-return cloud + frontier.
+  const allCombos = useMemo<SearchEntry[]>(() => {
+    if (scopedPool.length < SIZE_MIN) return [];
+    return searchAllPortfolios({
+      candidates: scopedPool,
+      sizeMin: SIZE_MIN,
+      sizeMax: SIZE_MAX,
+      topN: AUTO_TOP_N, // unused by searchAll, kept for opt parity
+      score,
+      startCapital,
+      weightScheme,
+    });
+  }, [scopedPool, score, startCapital, weightScheme]);
 
   // ── Full-period optimisation ────────────────────────────────────
   const fullPeriodResults = useMemo<RankedPortfolio[]>(() => {
@@ -613,6 +634,25 @@ export function PortfolioPage() {
         )}
       </FramedPanel>
 
+      {/* PARETO FRONTIER — risk vs return cloud across all combos. */}
+      {allCombos.length > 0 ? (
+        <FramedPanel
+          title="PARETO FRONTIER"
+          titleRight={
+            <span className="text-term-muted text-[10px] uppercase tracking-wider">
+              {allCombos.length.toLocaleString()} combinations searched
+            </span>
+          }
+        >
+          <ParetoFrontier
+            entries={allCombos}
+            tests={scopedPool}
+            highlightTestIds={fullPeriodResults.map((r) => r.testIds)}
+            height={340}
+          />
+        </FramedPanel>
+      ) : null}
+
       {/* YEAR-BY-YEAR */}
       {computeYoY ? (
         <FramedPanel
@@ -1037,6 +1077,16 @@ function ManualPreview({
           combined block fits in the right column of the builder. */}
       <DrawdownChart data={preview.curve} height={110} />
 
+      {/* Per-constituent stacked contribution chart — reveals who's
+          driving returns and when. Bands sum to the portfolio's
+          cumulative return curve. */}
+      <ContributionChart
+        tests={tests}
+        weights={preview.weights}
+        startCapital={preview.metrics.startCapital}
+        height={180}
+      />
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <KpiTile
           label="NET %"
@@ -1092,6 +1142,13 @@ function ManualPreview({
             `(${highCorr ? 'concentrated' : 'diversified'})`
           }
         />
+      </div>
+
+      {/* Monthly returns heatmap — year × month grid of % returns.
+          Reveals seasonality and one-month-wonder edges that the
+          headline composite hides. */}
+      <div className="border-t border-dashed border-term-borderDim pt-2">
+        <MonthlyReturnsHeatmap curve={preview.curve} />
       </div>
 
       <div className="border-t border-dashed border-term-borderDim pt-2 flex items-center justify-between gap-2">
