@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { InfoChip } from '@/components/ui';
 import {
   monthlyReturns,
@@ -41,6 +41,22 @@ const MONTH_LABELS = [
  */
 export function MonthlyReturnsHeatmap({ curve }: MonthlyReturnsHeatmapProps) {
   const grid = useMemo(() => buildGrid(monthlyReturns(curve)), [curve]);
+  const [expanded, setExpanded] = useState(false);
+
+  // Lock body scroll while the expanded modal is open; ESC closes it.
+  useEffect(() => {
+    if (!expanded) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setExpanded(false);
+    }
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [expanded]);
 
   if (grid.years.length === 0) {
     return (
@@ -52,83 +68,155 @@ export function MonthlyReturnsHeatmap({ curve }: MonthlyReturnsHeatmapProps) {
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
-        <span className="text-term-muted text-[10px] uppercase tracking-wider">
-          Monthly returns
-        </span>
-        <InfoChip
-          ariaLabel="About monthly returns heatmap"
-          width="w-72"
-          text={
-            'Each cell shows the portfolio return for that month. ' +
-            'Green = positive, red = negative; deeper shades for larger ' +
-            'moves (saturates at ±10%). YTD compounds the months in the ' +
-            "row honestly. Useful for seeing whether an edge is " +
-            'consistent or concentrated in one month / one regime.'
-          }
-        />
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-term-muted text-[10px] uppercase tracking-wider">
+            Monthly returns
+          </span>
+          <InfoChip
+            ariaLabel="About monthly returns heatmap"
+            width="w-72"
+            text={
+              'Each cell shows the portfolio return for that month. ' +
+              'Green = positive, red = negative; deeper shades for larger ' +
+              'moves (saturates at ±10%). YTD compounds the months in the ' +
+              "row honestly. Useful for seeing whether an edge is " +
+              'consistent or concentrated in one month / one regime.'
+            }
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="text-term-muted hover:text-term-text text-[10px] font-mono uppercase tracking-wider"
+          title="View the heatmap full-width"
+        >
+          [ ⤢ expand ]
+        </button>
       </div>
       <div className="overflow-x-auto">
-        <table className="font-mono text-[10px] border-separate border-spacing-0">
-          <thead>
-            <tr>
-              <th className="px-1.5 py-0.5"></th>
-              {MONTH_LABELS.map((m) => (
-                <th
-                  key={m}
-                  className="px-1.5 py-0.5 text-term-muted font-normal text-center min-w-[3rem]"
-                >
-                  {m}
-                </th>
-              ))}
-              <th className="px-1.5 py-0.5 text-term-muted font-normal text-center border-l border-term-borderDim">
-                YTD
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {grid.years.map((year) => {
-              const row = grid.byYear.get(year)!;
-              const ytd = ytdReturn(row);
-              return (
-                <tr key={year}>
-                  <td className="px-1.5 py-0.5 text-term-muted text-right">
-                    {year}
-                  </td>
-                  {row.map((cell, i) => (
-                    <td
-                      key={i}
-                      title={cell != null ? `${cell.toFixed(2)}%` : 'no data'}
-                      className="px-1.5 py-0.5 text-center tabular-nums"
-                      style={{
-                        backgroundColor:
-                          cell != null ? tintFor(cell) : 'transparent',
-                        color:
-                          cell != null
-                            ? textColorFor(cell)
-                            : 'rgb(var(--term-dim))',
-                      }}
-                    >
-                      {cell != null ? cell.toFixed(1) : '—'}
-                    </td>
-                  ))}
-                  <td
-                    className="px-1.5 py-0.5 text-center tabular-nums font-semibold border-l border-term-borderDim"
-                    style={{
-                      backgroundColor: tintFor(ytd, 0.5),
-                      color: textColorFor(ytd),
-                    }}
-                  >
-                    {ytd >= 0 ? '+' : ''}
-                    {ytd.toFixed(1)}%
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <HeatmapTable grid={grid} />
       </div>
+
+      {expanded ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Monthly returns heatmap, expanded view"
+          onClick={() => setExpanded(false)}
+          className="fixed inset-0 z-50 bg-black/85 flex items-start justify-center p-4 overflow-y-auto"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-term-bg border border-term-green/60 w-full max-w-5xl p-5 my-8 flex flex-col gap-3 font-mono cursor-default"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-term-greenBright text-base font-pixel tracking-wide">
+                  MONTHLY RETURNS
+                </h2>
+                <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                  {grid.years.length} year{grid.years.length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setExpanded(false)}
+                aria-label="Close"
+                className="text-term-muted hover:text-term-greenBright text-sm"
+              >
+                [ × close ]
+              </button>
+            </div>
+            {/* No overflow-x wrapper — the modal is wide enough to
+                fit all 12 months + YTD without horizontal scroll. */}
+            <HeatmapTable grid={grid} cellPadding="px-3 py-1" cellMinWidth="min-w-[3.5rem]" />
+            <p className="text-term-dim text-[10px] italic">
+              ESC or click outside to close.
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Shared table body — rendered both in the compact left-column panel
+ * (with horizontal scroll for narrow screens) and in the expanded
+ * full-width modal. Optional `cellPadding` / `cellMinWidth` overrides
+ * let the modal breathe with more whitespace per cell.
+ */
+function HeatmapTable({
+  grid,
+  cellPadding = 'px-1.5 py-0.5',
+  cellMinWidth = 'min-w-[3rem]',
+}: {
+  grid: Grid;
+  cellPadding?: string;
+  cellMinWidth?: string;
+}) {
+  return (
+    <table className="font-mono text-[10px] border-separate border-spacing-0 w-full">
+      <thead>
+        <tr>
+          <th className={cellPadding}></th>
+          {MONTH_LABELS.map((m) => (
+            <th
+              key={m}
+              className={`${cellPadding} text-term-muted font-normal text-center ${cellMinWidth}`}
+            >
+              {m}
+            </th>
+          ))}
+          <th
+            className={`${cellPadding} text-term-muted font-normal text-center border-l border-term-borderDim`}
+          >
+            YTD
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {grid.years.map((year) => {
+          const row = grid.byYear.get(year)!;
+          const ytd = ytdReturn(row);
+          return (
+            <tr key={year}>
+              <td className={`${cellPadding} text-term-muted text-right`}>
+                {year}
+              </td>
+              {row.map((cell, i) => (
+                <td
+                  key={i}
+                  title={cell != null ? `${cell.toFixed(2)}%` : 'no data'}
+                  className={`${cellPadding} text-center tabular-nums`}
+                  style={{
+                    backgroundColor:
+                      cell != null ? tintFor(cell) : 'transparent',
+                    color:
+                      cell != null
+                        ? textColorFor(cell)
+                        : 'rgb(var(--term-dim))',
+                  }}
+                >
+                  {cell != null ? cell.toFixed(1) : '—'}
+                </td>
+              ))}
+              <td
+                className={`${cellPadding} text-center tabular-nums font-semibold border-l border-term-borderDim`}
+                style={{
+                  backgroundColor: tintFor(ytd, 0.5),
+                  color: textColorFor(ytd),
+                }}
+              >
+                {ytd >= 0 ? '+' : ''}
+                {ytd.toFixed(1)}%
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 
