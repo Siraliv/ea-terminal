@@ -42,11 +42,11 @@ export function ReportSummary({ report, onOpenFull }: ReportSummaryProps) {
 
       <ScoreBar score={report.compositeScore} band={report.band} />
 
-      <p className="text-term-text text-xs leading-snug">
+      <p className="text-term-text text-sm leading-snug">
         {report.headline}
       </p>
 
-      <ul className="flex flex-col gap-1 text-[11px] font-mono leading-snug">
+      <ul className="flex flex-col gap-1.5 text-sm font-mono leading-snug">
         {report.observations.map((line, i) => (
           <li
             key={i}
@@ -64,7 +64,7 @@ export function ReportSummary({ report, onOpenFull }: ReportSummaryProps) {
       </ul>
 
       {report.warnings.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-[11px] font-mono leading-snug border border-dashed border-term-amber/60 px-2 py-1.5">
+        <ul className="flex flex-col gap-1.5 text-sm font-mono leading-snug border border-dashed border-term-amber/60 px-2 py-1.5">
           {report.warnings.map((w, i) => (
             <li key={i} className="text-term-amber">
               ⚠ {w}
