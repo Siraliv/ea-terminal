@@ -253,10 +253,15 @@
   --term-bgSoft:      28  30  33;    /* #1C1E21 */
   --term-surface:     34  37  40;    /* #222528 */
 
-  /* Text/foreground inherited identical to Emerald. */
-  --term-text:        220 220 220;
-  --term-muted:       138 138 138;
-  --term-dim:         74  74  74;
+  /* Foreground stack lifted vs. Emerald to compensate for the
+     brighter (graphite, not pure black) bg. Emerald's #4A4A4A `dim`
+     reads ~3.5:1 on #000 — barely passable for normal text; that
+     same colour on Dusk's #16181A drops below 2:1, illegible. The
+     values below restore the contrast ratios users see in Emerald
+     by bumping each tier proportionally to the lifted bg. */
+  --term-text:        232 232 232;   /* #E8E8E8 — primary body text */
+  --term-muted:       178 178 178;   /* #B2B2B2 — labels, captions */
+  --term-dim:         128 128 128;   /* #808080 — disclaimers, footnotes */
 
   /* --term-green normally drives the FramedPanel frame characters
      (`text-term-green/70`), the table header underline, button outlines,

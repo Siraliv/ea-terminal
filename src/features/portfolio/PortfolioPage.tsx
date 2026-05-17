@@ -278,13 +278,10 @@ export function PortfolioPage() {
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
               Year-by-year
             </span>
-            <BracketedButton
-              variant={computeYoY ? 'primary' : 'secondary'}
-              size="sm"
-              onClick={() => setComputeYoY((v) => !v)}
-            >
-              {computeYoY ? 'Hide' : 'Compute'}
-            </BracketedButton>
+            <YoYButton
+              active={computeYoY}
+              onToggle={() => setComputeYoY((v) => !v)}
+            />
           </div>
         </div>
         <p className="text-term-dim text-[10px] italic mt-3 leading-snug">
@@ -655,6 +652,55 @@ function ManualPreview({
         </ul>
       </div>
     </div>
+  );
+}
+
+/**
+ * Compute/Hide toggle for the year-by-year breakdown. Wrapped in a
+ * `group` so we can show a styled hover tooltip explaining what the
+ * computation actually does — the button label alone is too terse for
+ * first-time users.
+ */
+function YoYButton({
+  active,
+  onToggle,
+}: {
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <span className="relative inline-flex group">
+      <BracketedButton
+        variant={active ? 'primary' : 'secondary'}
+        size="sm"
+        onClick={onToggle}
+        title="Re-run the optimiser per calendar year. Slower than the full-period search but reveals which combinations dominated each year."
+      >
+        {active ? 'Hide' : 'Compute'}
+      </BracketedButton>
+      <span
+        role="tooltip"
+        className={[
+          'pointer-events-none absolute z-20',
+          'top-full left-0 mt-1',
+          'w-72 max-w-[calc(100vw-2rem)]',
+          'rounded-sm border border-term-dim bg-term-bg/95',
+          'px-2.5 py-2',
+          'text-[11px] leading-snug text-term-text',
+          'font-mono shadow-lg',
+          'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
+          'transition-opacity duration-100',
+        ].join(' ')}
+      >
+        Re-runs the portfolio optimiser separately for each calendar
+        year in your data. For every year, the same top-{POOL_CAP} pool
+        is scoped to that year and the best {SIZE_MIN}–{SIZE_MAX}-test
+        combination (by the current Score) is shown in a table below.
+        Useful for spotting which strategies dominated in different
+        market regimes — and for catching combinations that look
+        great over the whole period only because of one explosive year.
+      </span>
+    </span>
   );
 }
 
