@@ -251,9 +251,24 @@ export function PortfolioPage() {
             </Select>
           </div>
           <div className="flex flex-col gap-1">
-            <span className="text-term-muted text-[10px] uppercase tracking-wider">
-              To year
-            </span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                To year
+              </span>
+              {/* Reset to the open range. Only shown when at least
+                  one endpoint is set, so the chrome stays quiet
+                  when there's nothing to clear. */}
+              {isYearScoped ? (
+                <button
+                  type="button"
+                  onClick={() => setYearRange(ALL_RANGE)}
+                  className="text-term-muted hover:text-term-text text-[10px] font-mono uppercase tracking-wider"
+                  title="Clear the year range (back to start–end)"
+                >
+                  [ × clear ]
+                </button>
+              ) : null}
+            </div>
             <Select
               className="w-full"
               value={String(yearRange.to)}
