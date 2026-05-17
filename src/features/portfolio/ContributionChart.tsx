@@ -125,7 +125,9 @@ export function ContributionChart({
             tick={axisTick}
             axisLine={axisLine}
             tickLine={false}
-            width={56}
+            // Matches EquityCurveChart + DrawdownChart so the three
+            // stacked charts share the same plot-area x-origin.
+            width={68}
             tickFormatter={(v: number) =>
               `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`
             }

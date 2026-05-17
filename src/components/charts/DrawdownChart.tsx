@@ -78,7 +78,10 @@ export function DrawdownChart({ data, height = 140 }: DrawdownChartProps) {
           tick={axisTick}
           axisLine={axisLine}
           tickLine={false}
-          width={48}
+          // Matches the EquityCurveChart + ContributionChart widths so
+          // when the three are stacked vertically their plot areas
+          // line up and the x=0 axis sits at the same screen x.
+          width={68}
           // Drawdown is always ≤ 0 — pin the top of the axis at 0
           // so the user reads "depth from breakeven" unambiguously.
           domain={['dataMin', 0]}
