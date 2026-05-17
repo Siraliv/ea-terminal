@@ -626,16 +626,28 @@ function ManualPreview({
           {tests.map((t, i) => (
             <li
               key={t.id}
-              className="flex items-center justify-between gap-2"
+              className="grid grid-cols-[auto_1fr_auto] items-center gap-3"
             >
+              {/* Short label — clickable, opens test detail. */}
               <button
                 type="button"
                 onClick={() => onOpen(t.id)}
                 className="text-term-text hover:underline truncate"
+                title="Open test"
               >
                 {formatTestLabel(t)}
               </button>
-              <span className="text-term-dim tabular-nums shrink-0">
+              {/* Full EA name — right-aligned, dim, truncated.
+                  Disambiguates which underlying EA each short label
+                  refers to without expanding the rest of the row. */}
+              <span
+                className="text-term-muted truncate text-right"
+                title={t.ea_name}
+              >
+                {cleanEaName(t.ea_name)}
+              </span>
+              {/* Allocation weight. */}
+              <span className="text-term-dim tabular-nums shrink-0 w-10 text-right">
                 {(preview.weights[i]! * 100).toFixed(0)}%
               </span>
             </li>
@@ -686,4 +698,15 @@ function fmtSignedPct(n: number | null | undefined): string {
 function fmtNum(n: number | null | undefined, digits = 2): string {
   if (n == null || !Number.isFinite(n)) return '—';
   return n.toFixed(digits);
+}
+
+/**
+ * Display form of an EA name — strips the trailing `(vDDMMYY)` suffix
+ * that some MT5 exports embed (version is already shown in the short
+ * label) and any trailing underscores. The raw value is preserved on
+ * the `title` attribute so power users can still hover for the
+ * verbatim string.
+ */
+function cleanEaName(name: string): string {
+  return name.replace(/\s*\(v\d{6}\)\s*$/, '').replace(/_+$/, '');
 }
