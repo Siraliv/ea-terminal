@@ -6,10 +6,12 @@ import {
   BracketedTag,
   FramedPanel,
   InfoChip,
+  Input,
   KpiTile,
   Select,
 } from '@/components/ui';
 import { EquityCurveChart } from '@/components/charts/EquityCurveChart';
+import { DrawdownChart } from '@/components/charts/DrawdownChart';
 import { useTestsList } from '@/hooks/useTests';
 import { useRawCurves } from '@/hooks/useRawCurve';
 import {
@@ -23,7 +25,7 @@ import {
 } from '@/lib/yearFilter';
 import { applyYearRangeScope } from '@/lib/yearScope';
 import {
-  combineCurves,
+  combinePortfolio,
   computeMetrics,
   findBestPortfolios,
   scoreLabel,
@@ -32,17 +34,60 @@ import {
   type ScoreKey,
 } from '@/lib/portfolio';
 import { formatTestLabel } from '@/lib/testCode';
+import {
+  deleteSavedPortfolio,
+  listSavedPortfolios,
+  savePortfolio,
+  type SavedPortfolio,
+} from '@/lib/savedPortfolios';
+import { CorrelationMatrix } from './CorrelationMatrix';
 import type { Test } from '@/types/domain';
 
 // ─────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────
 
-const START_CAPITAL = 100_000;
+const DEFAULT_START_CAPITAL = 100_000;
 const POOL_CAP = 15;
 const SIZE_MIN = 2;
 const SIZE_MAX = 5;
 const AUTO_TOP_N = 5;
+/**
+ * Pool selection criterion — which metric determines which `POOL_CAP`
+ * tests are eligible for combination. Each criterion picks the same
+ * 15 number of tests but ordered differently, so changing this can
+ * radically change the AUTO recommendations.
+ */
+type PoolCriterion =
+  | 'profit_factor'
+  | 'sharpe_ratio'
+  | 'total_net_profit'
+  | 'recovery_factor'
+  | 'balance_dd_max_pct';
+
+const POOL_CRITERIA: Array<{
+  key: PoolCriterion;
+  label: string;
+  /** Higher value = better? false for drawdown. */
+  higherIsBetter: boolean;
+}> = [
+  { key: 'profit_factor', label: 'Profit Factor', higherIsBetter: true },
+  { key: 'sharpe_ratio', label: 'Sharpe', higherIsBetter: true },
+  { key: 'total_net_profit', label: 'Net PnL', higherIsBetter: true },
+  { key: 'recovery_factor', label: 'Recovery', higherIsBetter: true },
+  {
+    key: 'balance_dd_max_pct',
+    label: 'Max DD (lowest)',
+    higherIsBetter: false,
+  },
+];
+
+/**
+ * Average pairwise correlation above this threshold trips a
+ * concentration warning — the constituents move together, so the
+ * portfolio doesn't actually diversify away its own variance.
+ */
+const HIGH_CORRELATION_THRESHOLD = 0.7;
 
 // ─────────────────────────────────────────────────────────────────
 
@@ -56,32 +101,48 @@ export function PortfolioPage() {
   const [computeYoY, setComputeYoY] = useState(false);
   const [manualIds, setManualIds] = useState<string[]>([]);
   const [poolFilter, setPoolFilter] = useState('');
+  const [startCapital, setStartCapital] = useState<number>(
+    DEFAULT_START_CAPITAL,
+  );
+  const [poolCriterion, setPoolCriterion] = useState<PoolCriterion>(
+    'profit_factor',
+  );
+
+  // Saved portfolios — localStorage-backed for v1. Lazy-seeded on
+  // first render so the initial load doesn't bounce through an
+  // effect+setState pair; subsequent updates flow via the save /
+  // delete callbacks below which re-read storage and patch state.
+  const [savedPortfolios, setSavedPortfolios] = useState<SavedPortfolio[]>(
+    () => listSavedPortfolios(),
+  );
 
   const yearOptions = useMemo(() => availableYears(tests), [tests]);
   const isYearScoped = !isAllRange(yearRange);
 
-  // Range-scoped candidate pool — top `POOL_CAP` by profit factor in
-  // the active window. Raw curves are not fetched here (we'd need
-  // them for every test, which is a lot of MB on year-by-year search);
-  // we use the persisted downsampled curve as the projection source.
-  // It's a deliberate trade-off — Portfolio recommendations are
-  // directional, not audit-grade. The APPROX chip surfaces this.
+  // Range-scoped candidate pool — top `POOL_CAP` by the chosen pool
+  // criterion within the active window. Raw curves are not fetched
+  // here at the pool stage (we'd need them for every test, expensive
+  // on year-by-year search); we use the persisted downsampled curve
+  // as the projection source. Portfolio recommendations are
+  // directional, not audit-grade.
   const candidatePool = useMemo(() => {
+    const crit = POOL_CRITERIA.find((c) => c.key === poolCriterion)!;
     return tests
       .filter((t) => matchesYearRange(t, yearRange))
       .map((t) => applyYearRangeScope(t, yearRange))
       .filter(
         (t) =>
-          typeof t.profit_factor === 'number' &&
-          Number.isFinite(t.profit_factor) &&
+          typeof t[poolCriterion] === 'number' &&
+          Number.isFinite(t[poolCriterion] as number) &&
           t.equity_curve.length >= 2,
       )
-      .sort(
-        (a, b) =>
-          (b.profit_factor as number) - (a.profit_factor as number),
-      )
+      .sort((a, b) => {
+        const av = a[poolCriterion] as number;
+        const bv = b[poolCriterion] as number;
+        return crit.higherIsBetter ? bv - av : av - bv;
+      })
       .slice(0, POOL_CAP);
-  }, [tests, yearRange]);
+  }, [tests, yearRange, poolCriterion]);
 
   // Lazy raw curves for the candidate pool — used so the metrics on
   // every individual constituent are accurate when scoped to a year.
@@ -111,28 +172,30 @@ export function PortfolioPage() {
       sizeMax: SIZE_MAX,
       topN: AUTO_TOP_N,
       score,
-      startCapital: START_CAPITAL,
+      startCapital,
     });
-  }, [scopedPool, score]);
+  }, [scopedPool, score, startCapital]);
 
   // ── Year-by-year optimisation (button-triggered) ────────────────
   const yoYPool = useMemo(() => {
     // Year-by-year uses the *unscoped* tests but filters by year inside
-    // each iteration. Cap at top POOL_CAP by full-period PF so the
-    // search stays bounded.
+    // each iteration. Cap at top POOL_CAP by the current pool criterion
+    // so the search stays bounded and reflects user intent.
+    const crit = POOL_CRITERIA.find((c) => c.key === poolCriterion)!;
     return tests
       .filter(
         (t) =>
-          typeof t.profit_factor === 'number' &&
-          Number.isFinite(t.profit_factor) &&
+          typeof t[poolCriterion] === 'number' &&
+          Number.isFinite(t[poolCriterion] as number) &&
           t.equity_curve.length >= 2,
       )
-      .sort(
-        (a, b) =>
-          (b.profit_factor as number) - (a.profit_factor as number),
-      )
+      .sort((a, b) => {
+        const av = a[poolCriterion] as number;
+        const bv = b[poolCriterion] as number;
+        return crit.higherIsBetter ? bv - av : av - bv;
+      })
       .slice(0, POOL_CAP);
-  }, [tests]);
+  }, [tests, poolCriterion]);
 
   const yoYResults = useMemo<
     Array<{ year: number; best: RankedPortfolio | null }>
@@ -150,11 +213,11 @@ export function PortfolioPage() {
         sizeMax: SIZE_MAX,
         topN: 1,
         score,
-        startCapital: START_CAPITAL,
+        startCapital,
       });
       return { year: y, best: top[0] ?? null };
     });
-  }, [computeYoY, yearOptions, yoYPool, score]);
+  }, [computeYoY, yearOptions, yoYPool, score, startCapital]);
 
   // ── Manual builder ──────────────────────────────────────────────
   const manualTests = useMemo(
@@ -170,10 +233,14 @@ export function PortfolioPage() {
     const weights = new Array<number>(manualTests.length).fill(
       1 / manualTests.length,
     );
-    const curve = combineCurves(manualTests, weights, START_CAPITAL);
-    const metrics = computeMetrics(curve, START_CAPITAL);
-    return { weights, curve, metrics };
-  }, [manualTests]);
+    const { curve, correlation } = combinePortfolio(
+      manualTests,
+      weights,
+      startCapital,
+    );
+    const metrics = computeMetrics(curve, startCapital, correlation);
+    return { weights, curve, correlation, metrics };
+  }, [manualTests, startCapital]);
 
   const toggleManual = useCallback((id: string) => {
     setManualIds((cur) => {
@@ -186,6 +253,45 @@ export function PortfolioPage() {
   const clearManual = useCallback(() => setManualIds([]), []);
   const adoptPortfolio = useCallback((ids: string[]) => {
     setManualIds(ids.slice(0, SIZE_MAX));
+  }, []);
+
+  /** Save the current manual portfolio to localStorage under a name. */
+  const saveCurrentPortfolio = useCallback(() => {
+    if (manualTests.length < SIZE_MIN || !manualPreview) return;
+    const defaultName = manualTests
+      .map((t) => formatTestLabel(t))
+      .join(' + ');
+    const name = window.prompt(
+      'Save this portfolio as:',
+      defaultName.length > 60 ? `${manualTests.length} strategies` : defaultName,
+    );
+    if (!name) return;
+    savePortfolio({
+      name: name.trim() || defaultName,
+      testIds: manualTests.map((t) => t.id),
+      weights: manualPreview.weights,
+      scoreKey: score,
+      startCapital,
+    });
+    setSavedPortfolios(listSavedPortfolios());
+  }, [manualTests, manualPreview, score, startCapital]);
+
+  const loadSavedPortfolio = useCallback(
+    (p: SavedPortfolio) => {
+      setManualIds(p.testIds.slice(0, SIZE_MAX));
+      // Mirror the saved start capital so the preview matches what
+      // the user had when they saved.
+      if (Number.isFinite(p.startCapital) && p.startCapital > 0) {
+        setStartCapital(p.startCapital);
+      }
+    },
+    [],
+  );
+
+  const removeSavedPortfolio = useCallback((id: string) => {
+    if (!window.confirm('Delete this saved portfolio?')) return;
+    deleteSavedPortfolio(id);
+    setSavedPortfolios(listSavedPortfolios());
   }, []);
 
   const filteredPool = useMemo(() => {
@@ -210,17 +316,31 @@ export function PortfolioPage() {
 
       {/* CONTROLS */}
       <FramedPanel title="CONTROLS">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <div className="flex flex-col gap-1">
-            <span className="text-term-muted text-[10px] uppercase tracking-wider">
-              Score
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                Score
+              </span>
+              <InfoChip
+                ariaLabel="About score function"
+                width="w-72"
+                text={
+                  'Risk-adjusted return metric used to rank candidate ' +
+                  'portfolios. Sharpe uses total volatility; Sortino only ' +
+                  'punishes downside volatility (usually a better fit for ' +
+                  'asymmetric strategies); Calmar = annual return ÷ max ' +
+                  'drawdown; Recovery = net PnL ÷ max drawdown $.'
+                }
+              />
+            </div>
             <Select
               className="w-full"
               value={score}
               onChange={(e) => setScore(e.target.value as ScoreKey)}
             >
               <option value="sharpe">Sharpe</option>
+              <option value="sortino">Sortino</option>
               <option value="calmar">Calmar</option>
               <option value="recovery">Recovery</option>
             </Select>
@@ -318,12 +438,82 @@ export function PortfolioPage() {
               {computeYoY ? 'Hide' : 'Compute'}
             </BracketedButton>
           </div>
+
+          {/* Pool criterion — which 15 tests qualify as candidates. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                Pool
+              </span>
+              <InfoChip
+                ariaLabel="About pool criterion"
+                width="w-72"
+                text={
+                  `Which ${POOL_CAP} tests are eligible for combination. ` +
+                  `Changing this can radically change the AUTO suggestions ` +
+                  `— a Sharpe-ranked pool surfaces steady strategies; a ` +
+                  `Net PnL-ranked pool surfaces high-return ones; a ` +
+                  `Max-DD-ascending pool surfaces the safest. Picking ` +
+                  `from a single dimension is itself a bias, so try ` +
+                  `multiple and compare results.`
+                }
+              />
+            </div>
+            <Select
+              className="w-full"
+              value={poolCriterion}
+              onChange={(e) =>
+                setPoolCriterion(e.target.value as PoolCriterion)
+              }
+            >
+              {POOL_CRITERIA.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {/* Start capital — drives the dollar values shown in saved
+              portfolios. The page itself displays everything in %, so
+              this matters most for the "if I'd allocated $X" framing. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                Start $
+              </span>
+              <InfoChip
+                ariaLabel="About starting capital"
+                width="w-72"
+                text={
+                  'Seed capital used when compounding the combined ' +
+                  'portfolio return back into dollars. Affects the ' +
+                  'absolute Net $ / Drawdown $ numbers on saved ' +
+                  'portfolios and any future projections. Percentage ' +
+                  'metrics on this page are unchanged by it.'
+                }
+              />
+            </div>
+            <Input
+              className="w-full"
+              type="number"
+              min={1000}
+              step={1000}
+              value={startCapital}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n) && n > 0) setStartCapital(n);
+              }}
+            />
+          </div>
         </div>
         <p className="text-term-dim text-[10px] italic mt-3 leading-snug">
-          Pool: top {POOL_CAP} by Profit Factor within the active range.
-          Sizes searched: {SIZE_MIN}–{SIZE_MAX}. Weights are equal
-          (1/N) per constituent. Capital seeded at $
-          {START_CAPITAL.toLocaleString()}. Returns are derived from
+          Pool: top {POOL_CAP} by{' '}
+          {POOL_CRITERIA.find((c) => c.key === poolCriterion)?.label ??
+            poolCriterion}{' '}
+          within the active range. Sizes searched: {SIZE_MIN}–{SIZE_MAX}.
+          Weights are equal (1/N) per constituent. Capital seeded at $
+          {startCapital.toLocaleString()}. Returns are derived from
           backtest curves — directional, not predictive.
         </p>
       </FramedPanel>
@@ -374,6 +564,8 @@ export function PortfolioPage() {
                   <th className="py-1 pr-2 text-right">Score</th>
                   <th className="py-1 pr-2 text-right">Net %</th>
                   <th className="py-1 pr-2 text-right">Max DD</th>
+                  <th className="py-1 pr-2 text-right">Sortino</th>
+                  <th className="py-1 pr-2 text-right">Corr</th>
                   <th className="py-1 pr-2 text-right">
                     <span className="inline-flex items-center gap-1.5 justify-end w-full">
                       <span>Adopt</span>
@@ -431,6 +623,28 @@ export function PortfolioPage() {
                     <td className="py-1.5 pr-2 text-right text-term-amber tabular-nums">
                       {best
                         ? `${best.metrics.maxDrawdownPct.toFixed(1)}%`
+                        : '—'}
+                    </td>
+                    <td
+                      className={`py-1.5 pr-2 text-right tabular-nums ${
+                        best && best.metrics.sortino >= 0
+                          ? 'text-term-pos'
+                          : 'text-term-red'
+                      }`}
+                    >
+                      {best ? best.metrics.sortino.toFixed(2) : '—'}
+                    </td>
+                    <td
+                      className={`py-1.5 pr-2 text-right tabular-nums ${
+                        best &&
+                        best.metrics.avgPairwiseCorrelation >=
+                          HIGH_CORRELATION_THRESHOLD
+                          ? 'text-term-red'
+                          : 'text-term-muted'
+                      }`}
+                    >
+                      {best
+                        ? best.metrics.avgPairwiseCorrelation.toFixed(2)
                         : '—'}
                     </td>
                     <td className="py-1.5 pr-2 text-right">
@@ -524,6 +738,7 @@ export function PortfolioPage() {
                 tests={manualTests}
                 preview={manualPreview}
                 onOpen={(id) => navigate(`/tests/${id}`)}
+                onSave={saveCurrentPortfolio}
               />
             ) : (
               <p className="text-term-muted text-sm">
@@ -533,6 +748,70 @@ export function PortfolioPage() {
           </div>
         </div>
       </FramedPanel>
+
+      {/* SAVED PORTFOLIOS — only renders when the user has saved at
+          least one. localStorage-backed; no infra, no sync. */}
+      {savedPortfolios.length > 0 ? (
+        <FramedPanel
+          title="SAVED PORTFOLIOS"
+          titleRight={
+            <span className="text-term-muted text-[10px] uppercase tracking-wider">
+              {savedPortfolios.length} saved
+            </span>
+          }
+        >
+          <ul className="flex flex-col gap-1">
+            {savedPortfolios.map((p) => {
+              const constituents = p.testIds
+                .map((id) => tests.find((t) => t.id === id))
+                .filter((t): t is Test => !!t)
+                .map((t) => formatTestLabel(t));
+              const missing = p.testIds.length - constituents.length;
+              return (
+                <li
+                  key={p.id}
+                  className="grid grid-cols-[1fr_auto_auto] items-center gap-3 py-1 border-b border-dashed border-term-borderDim/40 last:border-b-0"
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-term-text font-mono text-sm truncate">
+                      {p.name}
+                    </span>
+                    <span className="text-term-muted text-[11px] font-mono truncate">
+                      {constituents.join(' + ')}
+                      {missing > 0 ? (
+                        <span className="text-term-red">
+                          {' '}
+                          · {missing} missing
+                        </span>
+                      ) : null}
+                      <span className="text-term-dim">
+                        {' '}
+                        · {scoreLabel(p.scoreKey)} · $
+                        {p.startCapital.toLocaleString()}
+                      </span>
+                    </span>
+                  </div>
+                  <BracketedButton
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => loadSavedPortfolio(p)}
+                    disabled={constituents.length < SIZE_MIN}
+                  >
+                    Load
+                  </BracketedButton>
+                  <BracketedButton
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => removeSavedPortfolio(p.id)}
+                  >
+                    Delete
+                  </BracketedButton>
+                </li>
+              );
+            })}
+          </ul>
+        </FramedPanel>
+      ) : null}
     </div>
   );
 }
@@ -560,13 +839,22 @@ function RankedList({
           className="border border-dashed border-term-borderDim p-3 flex flex-col gap-2"
         >
           <div className="flex items-baseline justify-between gap-2">
-            <div className="flex items-baseline gap-3">
+            <div className="flex items-baseline gap-3 flex-wrap">
               <span className="text-term-dim text-xs tabular-nums">
                 #{i + 1}
               </span>
               <BracketedTag variant={r.score >= 0 ? 'active' : 'paused'}>
                 {scoreLabel(score)} {r.score.toFixed(2)}
               </BracketedTag>
+              {/* Concentration warning when the constituents move
+                  together — high pairwise correlation means the
+                  Sharpe score above is flattered by dependence. */}
+              {r.metrics.avgPairwiseCorrelation >=
+              HIGH_CORRELATION_THRESHOLD ? (
+                <BracketedTag variant="breached">
+                  HIGH CORR {r.metrics.avgPairwiseCorrelation.toFixed(2)}
+                </BracketedTag>
+              ) : null}
             </div>
             <BracketedButton
               variant="secondary"
@@ -584,7 +872,7 @@ function RankedList({
               .join('  +  ')}
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs font-mono">
             <Metric
               label="Net %"
               v={fmtSignedPct(r.metrics.netPnlPct)}
@@ -595,13 +883,25 @@ function RankedList({
               v={`${r.metrics.maxDrawdownPct.toFixed(1)}%`}
               tone="amber"
             />
-            <Metric label="Lose run" v={`${r.metrics.maxLosingStreak}`} />
             <Metric
-              label="Lose %"
-              v={fmtSignedPct(
-                (r.metrics.maxLosingStreakPnl / r.metrics.startCapital) * 100,
-              )}
-              tone="red"
+              label="Sortino"
+              v={r.metrics.sortino.toFixed(2)}
+              tone={r.metrics.sortino >= 0 ? 'pos' : 'red'}
+            />
+            <Metric
+              label="Underwater %"
+              v={`${r.metrics.timeUnderwaterPct.toFixed(0)}%`}
+              tone="amber"
+            />
+            <Metric
+              label="Avg corr"
+              v={r.metrics.avgPairwiseCorrelation.toFixed(2)}
+              tone={
+                r.metrics.avgPairwiseCorrelation >=
+                HIGH_CORRELATION_THRESHOLD
+                  ? 'red'
+                  : undefined
+              }
             />
           </div>
         </div>
@@ -614,29 +914,32 @@ function ManualPreview({
   tests,
   preview,
   onOpen,
+  onSave,
 }: {
   tests: Test[];
   preview: {
     weights: number[];
     curve: import('@/types/domain').EquityCurve;
+    correlation: number[][];
     metrics: PortfolioMetrics;
   };
   onOpen: (id: string) => void;
+  onSave: () => void;
 }) {
+  const highCorr =
+    preview.metrics.avgPairwiseCorrelation >= HIGH_CORRELATION_THRESHOLD;
   return (
     <div className="flex flex-col gap-3">
       <EquityCurveChart
         data={preview.curve}
-        height={260}
+        height={220}
         asPercent
-        initialBalances={[
-          {
-            value: preview.metrics.startCapital,
-            color: 'rgb(var(--term-muted))',
-            label: 'Start (0%)',
-          },
-        ]}
       />
+
+      {/* Drawdown chart sits directly underneath the equity curve so
+          the user reads depth + duration together. Sized small so the
+          combined block fits in the right column of the builder. */}
+      <DrawdownChart data={preview.curve} height={110} />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         <KpiTile
@@ -649,57 +952,89 @@ function ManualPreview({
           value={`${preview.metrics.maxDrawdownPct.toFixed(1)}%`}
           tone="warn"
         />
+        <KpiTile label="SHARPE" value={preview.metrics.sharpe.toFixed(2)} />
+        <KpiTile label="SORTINO" value={preview.metrics.sortino.toFixed(2)} />
         <KpiTile
-          label="SHARPE"
-          value={preview.metrics.sharpe.toFixed(2)}
+          label="TIME UNDERWATER"
+          value={`${preview.metrics.timeUnderwaterPct.toFixed(0)}%`}
+          tone="warn"
         />
         <KpiTile
-          label="LOSE STREAK"
-          value={`${preview.metrics.maxLosingStreak} (${fmtSignedPct(
-            (preview.metrics.maxLosingStreakPnl /
-              preview.metrics.startCapital) *
-              100,
-          )})`}
+          label="LONGEST DD"
+          value={`${preview.metrics.longestUnderwaterDays.toFixed(0)}d`}
           tone="warn"
+        />
+        <KpiTile
+          label="AVG CORR"
+          value={preview.metrics.avgPairwiseCorrelation.toFixed(2)}
+          tone={highCorr ? 'negative' : 'neutral'}
+        />
+        <KpiTile
+          label="RECOVERY"
+          value={preview.metrics.recovery.toFixed(2)}
         />
       </div>
 
+      {highCorr ? (
+        <div className="text-[11px] font-mono text-term-red leading-snug border border-dashed border-term-red/60 px-2 py-1.5">
+          ▲ Average pairwise correlation is{' '}
+          {preview.metrics.avgPairwiseCorrelation.toFixed(2)} — the
+          constituents move together, so this portfolio is closer to
+          one leveraged strategy than a diversified set. Sharpe /
+          Sortino above are flattered by that dependence.
+        </div>
+      ) : null}
+
+      {/* Correlation heatmap — only meaningful for 2+ constituents,
+          which is enforced upstream (preview is null below SIZE_MIN). */}
       <div className="border-t border-dashed border-term-borderDim pt-2">
+        <CorrelationMatrix
+          matrix={preview.correlation}
+          labels={tests.map((t) => t.test_code ?? '…')}
+          caption={
+            `avg pairwise = ${preview.metrics.avgPairwiseCorrelation.toFixed(2)} ` +
+            `(${highCorr ? 'concentrated' : 'diversified'})`
+          }
+        />
+      </div>
+
+      <div className="border-t border-dashed border-term-borderDim pt-2 flex items-center justify-between gap-2">
         <span className="text-term-muted text-[10px] uppercase tracking-wider">
           Constituents
         </span>
-        <ul className="mt-1 flex flex-col gap-0.5 text-xs font-mono">
-          {tests.map((t, i) => (
-            <li
-              key={t.id}
-              className="grid grid-cols-[auto_1fr_auto] items-center gap-3"
-            >
-              {/* Short label — clickable, opens test detail. */}
-              <button
-                type="button"
-                onClick={() => onOpen(t.id)}
-                className="text-term-text hover:underline truncate"
-                title="Open test"
-              >
-                {formatTestLabel(t)}
-              </button>
-              {/* Full EA name — right-aligned, dim, truncated.
-                  Disambiguates which underlying EA each short label
-                  refers to without expanding the rest of the row. */}
-              <span
-                className="text-term-muted truncate text-right"
-                title={t.ea_name}
-              >
-                {cleanEaName(t.ea_name)}
-              </span>
-              {/* Allocation weight. */}
-              <span className="text-term-dim tabular-nums shrink-0 w-10 text-right">
-                {(preview.weights[i]! * 100).toFixed(0)}%
-              </span>
-            </li>
-          ))}
-        </ul>
+        <BracketedButton variant="primary" size="sm" onClick={onSave}>
+          Save Portfolio
+        </BracketedButton>
       </div>
+      <ul className="flex flex-col gap-0.5 text-xs font-mono">
+        {tests.map((t, i) => (
+          <li
+            key={t.id}
+            className="grid grid-cols-[auto_1fr_auto] items-center gap-3"
+          >
+            {/* Short label — clickable, opens test detail. */}
+            <button
+              type="button"
+              onClick={() => onOpen(t.id)}
+              className="text-term-text hover:underline truncate"
+              title="Open test"
+            >
+              {formatTestLabel(t)}
+            </button>
+            {/* Full EA name — right-aligned, dim, truncated. */}
+            <span
+              className="text-term-muted truncate text-right"
+              title={t.ea_name}
+            >
+              {cleanEaName(t.ea_name)}
+            </span>
+            {/* Allocation weight. */}
+            <span className="text-term-dim tabular-nums shrink-0 w-10 text-right">
+              {(preview.weights[i]! * 100).toFixed(0)}%
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
