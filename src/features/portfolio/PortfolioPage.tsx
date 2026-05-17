@@ -27,11 +27,13 @@ import { applyYearRangeScope } from '@/lib/yearScope';
 import {
   combinePortfolio,
   computeMetrics,
+  computeWeights,
   findBestPortfolios,
   scoreLabel,
   type PortfolioMetrics,
   type RankedPortfolio,
   type ScoreKey,
+  type WeightScheme,
 } from '@/lib/portfolio';
 import { formatTestLabel } from '@/lib/testCode';
 import {
@@ -110,6 +112,7 @@ export function PortfolioPage() {
   const [poolCriterion, setPoolCriterion] = useState<PoolCriterion>(
     'profit_factor',
   );
+  const [weightScheme, setWeightScheme] = useState<WeightScheme>('equal');
 
   // Saved portfolios — localStorage-backed for v1. Lazy-seeded on
   // first render so the initial load doesn't bounce through an
@@ -179,8 +182,9 @@ export function PortfolioPage() {
       topN: AUTO_TOP_N,
       score,
       startCapital,
+      weightScheme,
     });
-  }, [scopedPool, score, startCapital]);
+  }, [scopedPool, score, startCapital, weightScheme]);
 
   // ── Year-by-year optimisation (button-triggered) ────────────────
   const yoYPool = useMemo(() => {
@@ -220,10 +224,11 @@ export function PortfolioPage() {
         topN: 1,
         score,
         startCapital,
+        weightScheme,
       });
       return { year: y, best: top[0] ?? null };
     });
-  }, [computeYoY, yearOptions, yoYPool, score, startCapital]);
+  }, [computeYoY, yearOptions, yoYPool, score, startCapital, weightScheme]);
 
   // ── Manual builder ──────────────────────────────────────────────
   const manualTests = useMemo(
@@ -236,9 +241,7 @@ export function PortfolioPage() {
 
   const manualPreview = useMemo(() => {
     if (manualTests.length < 2) return null;
-    const weights = new Array<number>(manualTests.length).fill(
-      1 / manualTests.length,
-    );
+    const weights = computeWeights(manualTests, weightScheme);
     const { curve, correlation } = combinePortfolio(
       manualTests,
       weights,
@@ -246,7 +249,7 @@ export function PortfolioPage() {
     );
     const metrics = computeMetrics(curve, startCapital, correlation);
     return { weights, curve, correlation, metrics };
-  }, [manualTests, startCapital]);
+  }, [manualTests, startCapital, weightScheme]);
 
   // Composite Quality Score + narrative — computed only when there's
   // a previewable portfolio. Pure derivation; no side-effects.
@@ -263,8 +266,9 @@ export function PortfolioPage() {
       sizeMin: SIZE_MIN,
       sizeMax: SIZE_MAX,
       startCapital,
+      weightScheme,
     });
-  }, [manualPreview, manualTests, scopedPool, score, startCapital]);
+  }, [manualPreview, manualTests, scopedPool, score, startCapital, weightScheme]);
 
   const toggleManual = useCallback((id: string) => {
     setManualIds((cur) => {
@@ -295,19 +299,21 @@ export function PortfolioPage() {
       testIds: manualTests.map((t) => t.id),
       weights: manualPreview.weights,
       scoreKey: score,
+      weightScheme,
       startCapital,
     });
     setSavedPortfolios(listSavedPortfolios());
-  }, [manualTests, manualPreview, score, startCapital]);
+  }, [manualTests, manualPreview, score, startCapital, weightScheme]);
 
   const loadSavedPortfolio = useCallback(
     (p: SavedPortfolio) => {
       setManualIds(p.testIds.slice(0, SIZE_MAX));
-      // Mirror the saved start capital so the preview matches what
-      // the user had when they saved.
+      // Mirror the saved start capital + weight scheme so the
+      // preview matches what the user had when they saved.
       if (Number.isFinite(p.startCapital) && p.startCapital > 0) {
         setStartCapital(p.startCapital);
       }
+      if (p.weightScheme) setWeightScheme(p.weightScheme);
     },
     [],
   );
@@ -340,7 +346,7 @@ export function PortfolioPage() {
 
       {/* CONTROLS */}
       <FramedPanel title="CONTROLS">
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-7 gap-3">
           <div className="flex flex-col gap-1">
             <div className="flex items-center gap-2">
               <span className="text-term-muted text-[10px] uppercase tracking-wider">
@@ -369,6 +375,41 @@ export function PortfolioPage() {
               <option value="recovery">Recovery</option>
             </Select>
           </div>
+
+          {/* Weight scheme — how capital is allocated across N
+              constituents in each combination. Markowitz tends to
+              pump in-sample scores; the walk-forward check downstream
+              will surface the resulting overfit, if any. */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-term-muted text-[10px] uppercase tracking-wider">
+                Weights
+              </span>
+              <InfoChip
+                ariaLabel="About weight scheme"
+                width="w-80"
+                text={
+                  'How capital is split across constituents. ' +
+                  'Equal: 1/N per strategy (simplest, no view). ' +
+                  'Inverse Vol: more capital to steadier strategies, less to volatile ones — a risk-parity-lite. ' +
+                  'Markowitz: classical mean-variance tangency, long-only via clip-and-renormalise. ' +
+                  'Maximises in-sample Sharpe but is notoriously overfit-prone — watch the walk-forward IS/OOS gap in the report.'
+                }
+              />
+            </div>
+            <Select
+              className="w-full"
+              value={weightScheme}
+              onChange={(e) =>
+                setWeightScheme(e.target.value as WeightScheme)
+              }
+            >
+              <option value="equal">Equal</option>
+              <option value="inverseVol">Inverse Vol</option>
+              <option value="markowitz">Markowitz</option>
+            </Select>
+          </div>
+
           <div className="flex flex-col gap-1">
             <span className="text-term-muted text-[10px] uppercase tracking-wider">
               From year
@@ -536,9 +577,14 @@ export function PortfolioPage() {
           {POOL_CRITERIA.find((c) => c.key === poolCriterion)?.label ??
             poolCriterion}{' '}
           within the active range. Sizes searched: {SIZE_MIN}–{SIZE_MAX}.
-          Weights are equal (1/N) per constituent. Capital seeded at $
-          {startCapital.toLocaleString()}. Returns are derived from
-          backtest curves — directional, not predictive.
+          Weights:{' '}
+          {weightScheme === 'equal'
+            ? 'equal (1/N)'
+            : weightScheme === 'inverseVol'
+              ? 'inverse volatility'
+              : 'Markowitz (long-only, clipped)'}
+          . Capital seeded at ${startCapital.toLocaleString()}. Returns
+          are derived from backtest curves — directional, not predictive.
         </p>
       </FramedPanel>
 
@@ -771,6 +817,7 @@ export function PortfolioPage() {
               <ManualPreview
                 tests={manualTests}
                 preview={manualPreview}
+                weightScheme={weightScheme}
                 onOpen={(id) => navigate(`/tests/${id}`)}
                 onSave={saveCurrentPortfolio}
               />
@@ -820,8 +867,11 @@ export function PortfolioPage() {
                       ) : null}
                       <span className="text-term-dim">
                         {' '}
-                        · {scoreLabel(p.scoreKey)} · $
-                        {p.startCapital.toLocaleString()}
+                        · {scoreLabel(p.scoreKey)}
+                        {p.weightScheme && p.weightScheme !== 'equal'
+                          ? ` · ${p.weightScheme === 'inverseVol' ? 'inv-vol' : 'markowitz'}`
+                          : ''}
+                        {' '}· ${p.startCapital.toLocaleString()}
                       </span>
                     </span>
                   </div>
@@ -956,6 +1006,7 @@ function RankedList({
 function ManualPreview({
   tests,
   preview,
+  weightScheme,
   onOpen,
   onSave,
 }: {
@@ -966,6 +1017,8 @@ function ManualPreview({
     correlation: number[][];
     metrics: PortfolioMetrics;
   };
+  /** Active weighting mode — shown as a label above the constituents. */
+  weightScheme: WeightScheme;
   onOpen: (id: string) => void;
   onSave: () => void;
 }) {
@@ -1042,9 +1095,19 @@ function ManualPreview({
       </div>
 
       <div className="border-t border-dashed border-term-borderDim pt-2 flex items-center justify-between gap-2">
-        <span className="text-term-muted text-[10px] uppercase tracking-wider">
-          Constituents
-        </span>
+        <div className="flex items-baseline gap-2">
+          <span className="text-term-muted text-[10px] uppercase tracking-wider">
+            Constituents
+          </span>
+          <span className="text-term-dim text-[10px] italic">
+            ·{' '}
+            {weightScheme === 'equal'
+              ? 'equal weights'
+              : weightScheme === 'inverseVol'
+                ? 'inverse-vol weights'
+                : 'Markowitz weights (long-only)'}
+          </span>
+        </div>
         <BracketedButton variant="primary" size="sm" onClick={onSave}>
           Save Portfolio
         </BracketedButton>

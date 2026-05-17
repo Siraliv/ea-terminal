@@ -26,6 +26,12 @@ export interface SavedPortfolio {
   weights: number[];
   /** Score function used when this portfolio was saved (for context). */
   scoreKey: 'sharpe' | 'sortino' | 'calmar' | 'recovery';
+  /**
+   * Weighting scheme in effect when saved. Optional for back-compat
+   * with rows saved before weight schemes existed — loaders should
+   * default to `'equal'` when this field is absent.
+   */
+  weightScheme?: 'equal' | 'inverseVol' | 'markowitz';
   /** Starting capital used at save time ($). */
   startCapital: number;
   /** Optional free-text note. */

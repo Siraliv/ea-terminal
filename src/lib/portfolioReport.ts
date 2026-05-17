@@ -5,6 +5,7 @@ import {
   type PortfolioMetrics,
   type ScoreKey,
   type WalkForwardResult,
+  type WeightScheme,
 } from './portfolio';
 import { formatTestLabel } from './testCode';
 import type { Test } from '@/types/domain';
@@ -751,6 +752,12 @@ export interface ComposeReportOptions {
   sizeMax: number;
   /** Capital seeded into combined portfolio computations. */
   startCapital?: number;
+  /**
+   * Weighting scheme used by the validation step. Defaults to
+   * `equal`. When the page is running Markowitz, validation must
+   * use the same scheme so the IS/OOS gap is honest.
+   */
+  weightScheme?: WeightScheme;
 }
 
 /**
@@ -788,8 +795,9 @@ export function composeReport(
   let wf: WalkForwardResult | null = null;
   if (options) {
     const startCap = options.startCapital ?? 100_000;
+    const scheme: WeightScheme = options.weightScheme ?? 'equal';
     if (tests.length >= 2) {
-      loo = leaveOneOut(tests, startCap);
+      loo = leaveOneOut(tests, startCap, scheme);
     }
     // Walk-forward needs the candidate pool to run a real
     // optimiser per fold; if the caller only has the current
@@ -804,6 +812,7 @@ export function composeReport(
         sizeMax: options.sizeMax,
         score: options.scoreKey,
         startCapital: startCap,
+        weightScheme: scheme,
       });
     }
   }

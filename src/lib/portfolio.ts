@@ -23,6 +23,26 @@ import type { EquityPoint, Test } from '@/types/domain';
 
 export type ScoreKey = 'sharpe' | 'sortino' | 'calmar' | 'recovery';
 
+/**
+ * Allocation scheme used when combining N constituents into a
+ * portfolio.
+ *
+ *   - `equal` — `1/N` per constituent. The simplest baseline; no
+ *     view on which strategy is "better" than another.
+ *   - `inverseVol` — weights proportional to `1 / σ_i` then
+ *     normalised to sum to 1. Steady (low-vol) strategies get more
+ *     capital; volatile ones get less. A pragmatic risk-parity-lite.
+ *   - `markowitz` — mean-variance tangency portfolio that maximises
+ *     in-sample Sharpe given the empirical return covariance.
+ *     **Long-only via project-and-renormalise**: negative raw
+ *     weights are clipped to zero and the rest re-normalised. Not
+ *     truly optimal under the constraint (a real QP would be), but
+ *     close enough for 2-5 strategy portfolios. Notoriously
+ *     overfit-prone — the walk-forward step will surface this when
+ *     it bites.
+ */
+export type WeightScheme = 'equal' | 'inverseVol' | 'markowitz';
+
 export interface PortfolioMetrics {
   /** Combined curve value at last point − value at first point ($). */
   netPnl: number;
@@ -114,6 +134,13 @@ export interface OptimizeOptions {
   score: ScoreKey;
   /** Starting capital for the combined portfolio. Default $100k. */
   startCapital?: number;
+  /**
+   * How capital is allocated across constituents in each candidate
+   * combination. Default `equal`. Markowitz / inverseVol can lift
+   * raw in-sample scores but are typically more overfit-prone —
+   * the walk-forward step in the report will surface this.
+   */
+  weightScheme?: WeightScheme;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -165,6 +192,197 @@ function alignCurves(tests: readonly Test[]): {
   });
 
   return { timeline, balances, initial };
+}
+
+/**
+ * Build the unified-timeline per-strategy return arrays without
+ * combining them. Used by weight-computation routines (Markowitz,
+ * inverse-vol) that need each strategy's return series before any
+ * weights exist.
+ */
+function alignReturns(tests: readonly Test[]): {
+  timeline: number[];
+  returnsPerStep: number[][];
+  initial: number[];
+} {
+  const { timeline, balances, initial } = alignCurves(tests);
+  const returnsPerStep: number[][] = balances.map((bal, k) => {
+    const out = new Array(bal.length);
+    out[0] = 0;
+    for (let i = 1; i < bal.length; i++) {
+      const prev = bal[i - 1] ?? initial[k] ?? 0;
+      const cur = bal[i] ?? prev;
+      out[i] = prev > 0 ? cur / prev - 1 : 0;
+    }
+    return out;
+  });
+  return { timeline, returnsPerStep, initial };
+}
+
+// ────────────────────────────────────────────────────────────────
+// Weighting schemes
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Inverse-volatility weights: each constituent gets capital
+ * proportional to `1 / σ_i`, then we normalise so the weights sum
+ * to 1. Steady strategies are larger; high-vol strategies get
+ * fewer dollars. Falls back to equal weights when any σ is
+ * effectively zero (no variation in returns).
+ */
+export function inverseVolWeights(
+  returnsPerStep: readonly (readonly number[])[],
+): number[] {
+  const n = returnsPerStep.length;
+  if (n === 0) return [];
+  if (n === 1) return [1];
+  const sigmas = returnsPerStep.map((r) => stdev(r));
+  const anyZero = sigmas.some((s) => s < 1e-10);
+  if (anyZero) return new Array(n).fill(1 / n);
+  const inv = sigmas.map((s) => 1 / s);
+  const sum = inv.reduce((a, b) => a + b, 0);
+  return inv.map((x) => x / sum);
+}
+
+/**
+ * Markowitz mean-variance tangency portfolio — the long-only
+ * project-and-renormalise approximation:
+ *
+ *   1. Compute mean-return vector μ and covariance matrix Σ.
+ *   2. Solve unconstrained: w_raw = Σ⁻¹ μ.
+ *   3. Clip negatives to zero (no short selling).
+ *   4. Re-normalise so weights sum to 1.
+ *
+ * For 2-5 constituent portfolios this approximation is close
+ * enough; a true QP would be slightly better but adds substantial
+ * complexity for marginal gains.
+ *
+ * Failure modes (fallback to inverse-vol):
+ *   - Σ is singular (perfectly correlated strategies).
+ *   - All raw weights are non-positive (no positive Markowitz
+ *     solution under the long-only constraint).
+ */
+export function markowitzWeights(
+  returnsPerStep: readonly (readonly number[])[],
+): number[] {
+  const n = returnsPerStep.length;
+  if (n === 0) return [];
+  if (n === 1) return [1];
+
+  const mu = returnsPerStep.map((r) => mean(r));
+  const sigma = covarianceMatrix(returnsPerStep, mu);
+
+  // Tiny diagonal regulariser — prevents singular-matrix failures
+  // when constituents are very highly correlated. ε is small enough
+  // that it doesn't materially change weights in well-conditioned
+  // cases.
+  const eps = 1e-8;
+  for (let i = 0; i < n; i++) sigma[i]![i] += eps;
+
+  const sigmaInv = matInv(sigma);
+  if (!sigmaInv) return inverseVolWeights(returnsPerStep);
+
+  const raw = sigmaInv.map((row) =>
+    row.reduce((acc, v, j) => acc + v * mu[j]!, 0),
+  );
+  const clipped = raw.map((x) => Math.max(0, x));
+  const sum = clipped.reduce((a, b) => a + b, 0);
+  if (sum < 1e-10) return inverseVolWeights(returnsPerStep);
+  return clipped.map((x) => x / sum);
+}
+
+/**
+ * Top-level entry point: pick a weighting scheme by name and
+ * compute the actual weights for the given tests. Returns
+ * `[1, 1, ..., 1] / N` as the safe fallback for any error path.
+ */
+export function computeWeights(
+  tests: readonly Test[],
+  scheme: WeightScheme,
+): number[] {
+  const n = tests.length;
+  if (n === 0) return [];
+  if (n === 1) return [1];
+  if (scheme === 'equal') return new Array(n).fill(1 / n);
+  const { returnsPerStep } = alignReturns(tests);
+  if (scheme === 'inverseVol') return inverseVolWeights(returnsPerStep);
+  if (scheme === 'markowitz') return markowitzWeights(returnsPerStep);
+  return new Array(n).fill(1 / n);
+}
+
+/** Pearson covariance matrix from aligned per-strategy returns. */
+function covarianceMatrix(
+  returnsPerStep: readonly (readonly number[])[],
+  meansOpt?: readonly number[],
+): number[][] {
+  const n = returnsPerStep.length;
+  const means = meansOpt ?? returnsPerStep.map((r) => mean(r));
+  const out: number[][] = Array.from({ length: n }, () =>
+    new Array(n).fill(0),
+  );
+  for (let i = 0; i < n; i++) {
+    for (let j = i; j < n; j++) {
+      const a = returnsPerStep[i]!;
+      const b = returnsPerStep[j]!;
+      const len = Math.min(a.length, b.length);
+      if (len === 0) continue;
+      let cov = 0;
+      for (let k = 0; k < len; k++) {
+        cov += (a[k]! - means[i]!) * (b[k]! - means[j]!);
+      }
+      cov /= len;
+      out[i]![j] = cov;
+      out[j]![i] = cov;
+    }
+  }
+  return out;
+}
+
+/**
+ * Gauss-Jordan matrix inversion for small N (≤ 16). Returns null
+ * when the matrix is singular (within tolerance). Caller is
+ * expected to apply a tiny diagonal regulariser before invoking if
+ * the input could be near-singular.
+ */
+function matInv(m: readonly (readonly number[])[]): number[][] | null {
+  const n = m.length;
+  if (n === 0) return [];
+  // Build the [M | I] augmented matrix as a mutable working copy.
+  const aug: number[][] = m.map((row, i) => {
+    const id = new Array(n).fill(0) as number[];
+    id[i] = 1;
+    return [...row, ...id];
+  });
+  for (let i = 0; i < n; i++) {
+    let rowI = aug[i]!;
+    let pivot = rowI[i]!;
+    if (Math.abs(pivot) < 1e-12) {
+      let swapped = false;
+      for (let k = i + 1; k < n; k++) {
+        if (Math.abs(aug[k]![i]!) > 1e-12) {
+          const tmp = aug[i]!;
+          aug[i] = aug[k]!;
+          aug[k] = tmp;
+          rowI = aug[i]!;
+          pivot = rowI[i]!;
+          swapped = true;
+          break;
+        }
+      }
+      if (!swapped) return null;
+    }
+    for (let j = 0; j < 2 * n; j++) rowI[j] = rowI[j]! / pivot;
+    for (let k = 0; k < n; k++) {
+      if (k === i) continue;
+      const rowK = aug[k]!;
+      const factor = rowK[i]!;
+      if (factor === 0) continue;
+      for (let j = 0; j < 2 * n; j++) {
+        rowK[j] = rowK[j]! - factor * rowI[j]!;
+      }
+    }
+  }
+  return aug.map((row) => row.slice(n));
 }
 
 /**
@@ -558,6 +776,7 @@ export function findBestPortfolios(
     topN,
     score,
     startCapital = 100_000,
+    weightScheme = 'equal',
   } = opts;
   if (candidates.length < sizeMin) return [];
   const all: RankedPortfolio[] = [];
@@ -566,7 +785,7 @@ export function findBestPortfolios(
   const lowerK = Math.max(sizeMin, 2);
   for (let k = lowerK; k <= upperK; k++) {
     for (const combo of combinations(candidates, k)) {
-      const weights = new Array<number>(k).fill(1 / k);
+      const weights = computeWeights(combo, weightScheme);
       const { curve, correlation } = combinePortfolio(
         combo,
         weights,
@@ -631,6 +850,7 @@ export interface LeaveOneOutResult {
 export function leaveOneOut(
   tests: readonly Test[],
   startCapital = 100_000,
+  weightScheme: WeightScheme = 'equal',
 ): LeaveOneOutResult {
   if (tests.length < 2) {
     return {
@@ -641,18 +861,18 @@ export function leaveOneOut(
     };
   }
 
-  // Full-portfolio Sharpe as the denominator. Equal weights at every
-  // size keeps the comparison apples-to-apples.
-  const fullWeights = new Array<number>(tests.length).fill(1 / tests.length);
+  // Full-portfolio Sharpe as the denominator. Reweighting under the
+  // same scheme keeps the comparison apples-to-apples: under
+  // Markowitz, dropping a constituent re-derives weights for the
+  // remaining set, which is what you'd actually do in practice.
+  const fullWeights = computeWeights(tests, weightScheme);
   const full = combinePortfolio(tests, fullWeights, startCapital);
   const fullMetrics = computeMetrics(full.curve, startCapital, full.correlation);
   const fullSharpe = fullMetrics.sharpe;
 
   const entries: LeaveOneOutEntry[] = tests.map((dropped, i) => {
     const remaining = tests.filter((_, k) => k !== i);
-    const weights = new Array<number>(remaining.length).fill(
-      1 / remaining.length,
-    );
+    const weights = computeWeights(remaining, weightScheme);
     const { curve, correlation } = combinePortfolio(
       remaining,
       weights,
@@ -750,6 +970,7 @@ export function walkForward(
     sizeMax: number;
     score: ScoreKey;
     startCapital?: number;
+    weightScheme?: WeightScheme;
   },
 ): WalkForwardResult {
   const {
@@ -758,6 +979,7 @@ export function walkForward(
     sizeMax,
     score,
     startCapital = 100_000,
+    weightScheme = 'equal',
   } = options;
 
   // Bail when we don't have enough data to meaningfully split.
@@ -814,7 +1036,7 @@ export function walkForward(
 
     if (isCandidates.length < sizeMin) continue;
 
-    // Optimise on IS only.
+    // Optimise on IS only — same weighting scheme the page is using.
     const isTop = findBestPortfolios({
       candidates: isCandidates,
       sizeMin,
@@ -822,6 +1044,7 @@ export function walkForward(
       topN: 1,
       score,
       startCapital,
+      weightScheme,
     });
     const winner = isTop[0];
     if (!winner) continue;
@@ -832,9 +1055,10 @@ export function walkForward(
     const oosTests = winner.testIds.map((id) => oosCandidatesById.get(id));
     if (oosTests.some((t) => !t)) continue;
 
-    const oosWeights = new Array<number>(winner.testIds.length).fill(
-      1 / winner.testIds.length,
-    );
+    // OOS weights are recomputed from the OOS slice under the same
+    // scheme so the comparison is honest — equal-weight portfolios
+    // stay equal; Markowitz reweights against the OOS covariance.
+    const oosWeights = computeWeights(oosTests as Test[], weightScheme);
     const { curve: oosCurve, correlation: oosCorr } = combinePortfolio(
       oosTests as Test[],
       oosWeights,
