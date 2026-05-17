@@ -41,6 +41,9 @@ import {
   type SavedPortfolio,
 } from '@/lib/savedPortfolios';
 import { CorrelationMatrix } from './CorrelationMatrix';
+import { ReportSummary } from './ReportSummary';
+import { FullReportModal } from './FullReportModal';
+import { composeReport, type PortfolioReport } from '@/lib/portfolioReport';
 import type { Test } from '@/types/domain';
 
 // ─────────────────────────────────────────────────────────────────
@@ -115,6 +118,9 @@ export function PortfolioPage() {
   const [savedPortfolios, setSavedPortfolios] = useState<SavedPortfolio[]>(
     () => listSavedPortfolios(),
   );
+
+  // Full-report modal — null when closed.
+  const [fullReportOpen, setFullReportOpen] = useState(false);
 
   const yearOptions = useMemo(() => availableYears(tests), [tests]);
   const isYearScoped = !isAllRange(yearRange);
@@ -241,6 +247,13 @@ export function PortfolioPage() {
     const metrics = computeMetrics(curve, startCapital, correlation);
     return { weights, curve, correlation, metrics };
   }, [manualTests, startCapital]);
+
+  // Composite Quality Score + narrative — computed only when there's
+  // a previewable portfolio. Pure derivation; no side-effects.
+  const manualReport = useMemo<PortfolioReport | null>(() => {
+    if (!manualPreview) return null;
+    return composeReport(manualPreview.metrics, manualTests);
+  }, [manualPreview, manualTests]);
 
   const toggleManual = useCallback((id: string) => {
     setManualIds((cur) => {
@@ -729,6 +742,16 @@ export function PortfolioPage() {
                 pick {SIZE_MIN}–{SIZE_MAX} tests to preview
               </span>
             </div>
+
+            {/* Composite Quality Score panel — only renders when there's
+                a previewable portfolio. Fills the otherwise-empty space
+                below the candidate list on wide screens. */}
+            {manualReport ? (
+              <ReportSummary
+                report={manualReport}
+                onOpenFull={() => setFullReportOpen(true)}
+              />
+            ) : null}
           </div>
 
           {/* Preview */}
@@ -812,6 +835,15 @@ export function PortfolioPage() {
           </ul>
         </FramedPanel>
       ) : null}
+
+      {/* Full deep-dive report — rendered at the document root via a
+          fixed overlay; only mounted when the user actually opens it. */}
+      <FullReportModal
+        report={fullReportOpen ? manualReport : null}
+        metrics={fullReportOpen ? manualPreview?.metrics ?? null : null}
+        tests={manualTests}
+        onClose={() => setFullReportOpen(false)}
+      />
     </div>
   );
 }

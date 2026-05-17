@@ -69,6 +69,18 @@ export interface PortfolioMetrics {
   startCapital: number;
   /** Capital at the last portfolio timestamp ($). */
   endCapital: number;
+  /**
+   * Span of the combined curve in calendar years. Used by the
+   * report layer to convert raw `netPnlPct` into an annualised
+   * return (and to flag suspiciously-short backtest windows).
+   */
+  years: number;
+  /**
+   * Compound annual growth rate (CAGR) over `years`, expressed as
+   * a percentage. Honest version of "return per year" — accounts
+   * for compounding rather than naïve `netPnlPct / years`.
+   */
+  annualisedReturnPct: number;
 }
 
 export interface RankedPortfolio {
@@ -434,6 +446,8 @@ export function computeMetrics(
     avgPairwiseCorrelation: avgCorr,
     startCapital: start,
     endCapital: end,
+    years: yearsSpan,
+    annualisedReturnPct: annualisedReturn * 100,
   };
 }
 
@@ -452,6 +466,8 @@ function zeroMetrics(startCapital: number): PortfolioMetrics {
     avgPairwiseCorrelation: 0,
     startCapital,
     endCapital: startCapital,
+    years: 0,
+    annualisedReturnPct: 0,
   };
 }
 
