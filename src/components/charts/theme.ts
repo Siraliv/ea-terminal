@@ -29,6 +29,11 @@ export const chartTheme = {
   muted: 'rgb(var(--term-muted))',
   dim: 'rgb(var(--term-dim))',
   bg: 'rgb(var(--term-bg))',
+  // Mirrors the dashed-divider colour used elsewhere on the page
+  // (FramedPanel rules, KV row separators). Lets grids/axes pick up
+  // the same theme-specific tone — in Dusk this is near-black so the
+  // grid lines read as sunken seams instead of disappearing.
+  borderDim: 'rgb(var(--term-borderDim))',
 } as const;
 
 export const axisTick = {
@@ -38,13 +43,22 @@ export const axisTick = {
 } as const;
 
 export const axisLine = {
-  stroke: chartTheme.green,
-  strokeOpacity: 0.3,
+  // Axis baseline tracks the dashed-divider tone so it reads as
+  // part of the same "frame" language as the surrounding panels.
+  // In Dusk that's near-black (sunken seam); in Emerald it's the
+  // faint forest-green border tier.
+  stroke: chartTheme.borderDim,
+  strokeOpacity: 1,
 } as const;
 
 export const gridProps = {
-  stroke: chartTheme.green,
-  strokeOpacity: 0.12,
+  // Grid lines pick up the same borderDim token so they automatically
+  // darken / lighten per theme. Full opacity (no fade) because the
+  // colour itself is already tuned to be subtle against each theme's
+  // background — letting Recharts fade it further made it invisible
+  // on the lifted-graphite Dusk surface.
+  stroke: chartTheme.borderDim,
+  strokeOpacity: 1,
   strokeDasharray: '2 3',
   vertical: false,
 } as const;
