@@ -53,3 +53,6 @@ export type { KVProps } from './KV';
 
 export { Caret } from './Caret';
 export type { CaretProps } from './Caret';
+
+export { InfoChip } from './InfoChip';
+export type { InfoChipProps } from './InfoChip';

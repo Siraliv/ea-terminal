@@ -5,6 +5,7 @@ import {
   BracketedButton,
   BracketedTag,
   FramedPanel,
+  InfoChip,
   KpiTile,
   Select,
   TerminalTable,
@@ -1088,46 +1089,3 @@ function MetricSubPanel({
   );
 }
 
-/**
- * `[?]` hover affordance. Keyboard-focusable for accessibility; the
- * tooltip body is a styled popover (not the native `title` attribute)
- * so its look matches the terminal aesthetic.
- */
-function InfoChip({ text, ariaLabel }: { text: string; ariaLabel: string }) {
-  return (
-    <span className="relative inline-flex group">
-      <button
-        type="button"
-        aria-label={ariaLabel}
-        className={[
-          'inline-flex items-center justify-center',
-          'w-4 h-4 rounded-sm',
-          'text-[9px] font-bold leading-none',
-          'text-term-muted hover:text-term-text',
-          'border border-term-dim hover:border-term-muted',
-          'transition-colors cursor-help',
-          'focus:outline-none focus:ring-1 focus:ring-term-pos',
-        ].join(' ')}
-      >
-        ?
-      </button>
-      <span
-        role="tooltip"
-        className={[
-          'pointer-events-none absolute z-20',
-          'top-full left-0 mt-1',
-          'w-64 max-w-[calc(100vw-2rem)]',
-          'rounded-sm border border-term-dim bg-term-bg/95',
-          'px-2.5 py-2',
-          'text-[11px] leading-snug text-term-text',
-          'font-mono',
-          'shadow-lg',
-          'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100',
-          'transition-opacity duration-100',
-        ].join(' ')}
-      >
-        {text}
-      </span>
-    </span>
-  );
-}
