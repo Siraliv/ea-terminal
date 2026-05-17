@@ -302,10 +302,14 @@
   --term-bgOverlay:   38  42  46;    /* #262A2E */
 
   /* Borders. --term-border is used by dashed dividers in `<KV>` rows,
-     section headers, and a few panels. Drop it to a dark charcoal so
-     dividers still read but feel softer than Emerald's greenDim. */
-  --term-border:      40  44  48;    /* #282C30 */
-  --term-borderDim:   28  31  34;    /* #1C1F22 */
+     section headers, and a few panels. In Dusk the bg is lifted to
+     graphite, so the old #1C1F22 borderDim sat *brighter* than the
+     surface and effectively disappeared. Dropped both border tokens
+     to near-black so the dashed dividers read as a sunken ink seam
+     — same treatment as `--term-green` here (#060606), keeping the
+     "boxes feel inset into the page" identity of this theme. */
+  --term-border:      14  14  16;    /* #0E0E10 — body dividers */
+  --term-borderDim:   6   6   8;     /* #060608 — faint dashed rules */
   --term-borderHot:   0   255 127;   /* phosphor green for active outline */
 
   /* Soft phosphor glow on bright accents — kept lighter than Emerald's
