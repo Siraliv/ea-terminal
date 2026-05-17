@@ -849,6 +849,16 @@ export function PortfolioPage() {
                 onOpenFull={() => setFullReportOpen(true)}
               />
             ) : null}
+
+            {/* Monthly returns heatmap — lives on the left so the right
+                column (chart stack) stays focused on equity / drawdown
+                / contribution. The heatmap reads as a tabular grid and
+                pairs naturally with the Composite Quality Score above. */}
+            {manualPreview ? (
+              <div className="border border-dashed border-term-borderDim p-3">
+                <MonthlyReturnsHeatmap curve={manualPreview.curve} />
+              </div>
+            ) : null}
           </div>
 
           {/* Preview */}
@@ -1144,12 +1154,6 @@ function ManualPreview({
         />
       </div>
 
-      {/* Monthly returns heatmap — year × month grid of % returns.
-          Reveals seasonality and one-month-wonder edges that the
-          headline composite hides. */}
-      <div className="border-t border-dashed border-term-borderDim pt-2">
-        <MonthlyReturnsHeatmap curve={preview.curve} />
-      </div>
 
       <div className="border-t border-dashed border-term-borderDim pt-2 flex items-center justify-between gap-2">
         <div className="flex items-baseline gap-2">
